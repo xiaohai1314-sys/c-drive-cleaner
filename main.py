@@ -2125,9 +2125,12 @@ class App(tk.Tk):
 
     def _mig_undo_worker(self, src):
         try:
-            migrate.undo(src)
+            result = migrate.undo(src)
             self._mig_running = False
-            self.queue.put(("mig_done", True, src))
+            if result.ok:
+                self.queue.put(("mig_done", True, src))
+            else:
+                self.queue.put(("mig_done", "partial", result.warning))
         except Exception as exc:
             self._mig_running = False
             self.queue.put(("mig_done", False, str(exc)))

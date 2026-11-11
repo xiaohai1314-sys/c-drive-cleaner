@@ -115,53 +115,6 @@ def _robocopy(src: str, dst: str, move: bool) -> int:
     return proc.returncode
 
 
-def _remove_junction_dirs(root: str):
-    """删除 root 之下（不含 root）的空目录与联接，跳过普通非空目录。"""
-    stack = [root]
-    dirs = []
-    while stack:
-        current = stack.pop()
-        try:
-            with os.scandir(current) as it:
-                for entry in it:
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            if utils.is_link_like(entry):
-                                try:
-                                    os.rmdir(entry.path)  # 只删联接本身
-                                except OSError:
-                                    pass
-                            else:
-                                dirs.append(entry.path)
-                                stack.append(entry.path)
-                    except OSError:
-                        continue
-        except OSError:
-            continue
-    for path in sorted(dirs, key=len, reverse=True):
-        try:
-            os.rmdir(path)
-        except OSError:
-            pass
-
-
-def remove_tree(root: str):
-    """安全删除目录：先删文件，再删空目录，绝不跟随联接。"""
-    if is_junction(root):
-        try:
-            os.rmdir(root)
-        except OSError:
-            pass
-        return
-    for entry in utils.walk_files(root):
-        os.remove(entry.path)
-    _remove_junction_dirs(root)
-    try:
-        os.rmdir(root)
-    except OSError:
-        pass
-
-
 def create_junction(link: str, target: str):
     try:
         proc = subprocess.run(["cmd", "/c", "mklink", "/J", link, target],
@@ -539,8 +492,42 @@ def inventory_covers(have: dict, need: dict) -> bool:
     return True
 
 
+def _drop_covered(root: str, survivor: str):
+    """只删除 root 里、且 survivor 仍有相同内容的文件。返回留下的路径。"""
+    if not root or os.path.islink(root) or safepath.is_reparse_point(root) or not os.path.isdir(root):
+        return _list_remaining(root)
+    manifest = _manifest(root)
+    have = file_inventory(survivor)
+    covered = {}
+    for rel, (size, mtime, digest) in manifest.items():
+        if have.get(rel) == (size, digest):
+            covered[rel] = (size, mtime, digest)
+    return _release_manifest(root, covered)
+
+
+def _unlink_link_only(path: str) -> bool:
+    """只在目录项仍是符号链接时删除链接本身。"""
+    parent = os.path.dirname(path) or "."
+    name = os.path.basename(path)
+    try:
+        dirfd = _open_parent_dirfd(parent)
+    except OSError:
+        return False
+    try:
+        try:
+            info = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
+        except OSError:
+            return False
+        if not stat.S_ISLNK(info.st_mode):
+            return False
+        os.unlink(name, dir_fd=dirfd)
+        return True
+    finally:
+        os.close(dirfd)
+
+
 def _rollback_to_source(src: str, dest: str):
-    """把目标副本拷回源位置。校验通过后才删除目标，避免删掉唯一的一份。"""
+    """把目标副本拷回源位置。只删除源里已经核对过的那一份。"""
     if safepath.is_reparse_point(src):
         try:
             os.rmdir(src)
@@ -551,8 +538,10 @@ def _rollback_to_source(src: str, dest: str):
     _robocopy(dest, src, move=False)
     if not inventory_covers(file_inventory(src), needed):
         raise MigrateError("还原校验失败，目标位置的副本已保留，没有删除唯一的一份")
-    if os.path.isdir(dest):
-        remove_tree(dest)
+    remaining = _drop_covered(dest, src) if os.path.isdir(dest) else _list_remaining(dest)
+    if remaining:
+        return MigrateResult(src, dest, status="partial", backup=dest, remaining=remaining)
+    return MigrateResult(src, dest, status="ok")
 
 
 def migrate(src: str, dest_root: str, log=lambda _message: None):
@@ -564,8 +553,11 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
     original = file_inventory(src)
     rc = _robocopy(src, dest, move=False)
     if rc >= 8 or not inventory_covers(file_inventory(dest), original):
-        if inventory_covers(file_inventory(src), original) and os.path.isdir(dest):
-            remove_tree(dest)
+        remaining = []
+        if inventory_covers(file_inventory(src), original) and os.path.isdir(dest) and not os.path.islink(dest):
+            remaining = _drop_covered(dest, src)
+        if remaining:
+            return MigrateResult(src, dest, status="partial", backup=dest, remaining=remaining)
         raise MigrateError(f"复制校验失败（robocopy 返回 {rc}），源目录保持原样")
 
     fresh_manifest = _manifest(src)
@@ -583,9 +575,15 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
             raise MigrateError("联接校验失败")
     except Exception as exc:
         log("建立联接失败，正在把源目录还原…")
-        _restore_renamed_source(src, backup)
-        if inventory_covers(file_inventory(src), original) and os.path.isdir(dest):
-            remove_tree(dest)
+        blocked = _restore_renamed_source(src, backup)
+        if blocked:
+            return MigrateResult(src, dest, status="partial", backup=backup, remaining=blocked)
+        dest_left = []
+        if (inventory_covers(file_inventory(src), original)
+                and os.path.isdir(dest) and not os.path.islink(dest)):
+            dest_left = _drop_covered(dest, src)
+        if dest_left:
+            return MigrateResult(src, dest, status="partial", backup=dest, remaining=dest_left)
         raise MigrateError(
             "建立联接失败，源目录已还原，数据未丢失") from exc
     remaining = _release_manifest(backup, fresh_manifest)
@@ -597,20 +595,22 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
 
 
 def _restore_renamed_source(src: str, backup: str):
-    """联接失败时把改名的源目录放回原路径。"""
+    """联接失败时把改名的源目录放回原路径。腾不出原路径时返回留下的文件。"""
     if not os.path.lexists(backup):
         raise MigrateError(f"找不到备份，无法还原：{backup}")
     if os.path.lexists(src):
-        if os.path.islink(src) or safepath.is_reparse_point(src):
-            try:
-                os.unlink(src)
-            except OSError:
-                os.rmdir(src)
-        elif os.path.isdir(src) and not os.listdir(src):
-            os.rmdir(src)
+        if os.path.islink(src):
+            if not _unlink_link_only(src):
+                return _list_remaining(src) or [src]
+        elif os.path.isdir(src):
+            if _list_remaining(src):
+                return _list_remaining(src)
+            if not _rmdir_if_empty(src):
+                return _list_remaining(src) or [src]
         else:
-            raise MigrateError(f"原路径被占用，数据仍在 {backup}")
+            return [src]
     os.rename(backup, src)
+    return []
 
 
 def undo(src: str, log=lambda _message: None):
@@ -637,9 +637,12 @@ def undo(src: str, log=lambda _message: None):
             "搬回校验失败，目标副本已保留，没有删除唯一的一份。"
             f"请检查原位置 {src} 和目标 {target}")
 
-    remove_tree(target)
+    remaining = _drop_covered(target, src)
+    if remaining:
+        log(f"目标里还有未删除的内容：{target}")
+        return MigrateResult(src, target, status="partial", backup=target, remaining=remaining)
     log(f"已还原：{src}")
-    return src
+    return MigrateResult(src, target, status="ok")
 
 
 _UNINSTALL_KEYS = (

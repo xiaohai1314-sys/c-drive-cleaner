@@ -321,10 +321,12 @@ class MigrateRollbackTests(unittest.TestCase):
             with mock.patch.object(migrate, "_drive_of", side_effect=drive), \
                     mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
                     mock.patch.object(migrate, "is_junction", return_value=False):
-                with self.assertRaises(migrate.MigrateError):
-                    migrate.migrate(src, dest_root)
+                result = migrate.migrate(src, dest_root)
             self.assertTrue(os.path.isfile(os.path.join(src, "a.txt")))
-            self.assertFalse(os.path.exists(os.path.join(dest_root, os.path.basename(src))))
+            partial = os.path.join(dest_root, os.path.basename(src), "partial.txt")
+            self.assertTrue(os.path.isfile(partial))
+            self.assertFalse(result.ok)
+            self.assertIn("partial.txt", result.warning)
         finally:
             shutil.rmtree(src, ignore_errors=True)
             shutil.rmtree(dest_root, ignore_errors=True)
@@ -1291,6 +1293,303 @@ class FifthReviewTests(unittest.TestCase):
                 self.assertEqual(handle.read(), b"LOCALDATA")
         finally:
             shutil.rmtree(folder, ignore_errors=True)
+
+
+class SixthReviewTests(unittest.TestCase):
+    def _drive(self, dest_root):
+        def drive(path):
+            full = os.path.abspath(path)
+            root = os.path.abspath(dest_root)
+            if full == root or full.startswith(root + os.sep):
+                return "D:"
+            return "C:"
+        return drive
+
+    def _plain_success(self, result):
+        if result is None or isinstance(result, (tuple, str)):
+            return True
+        if isinstance(result, migrate.MigrateResult):
+            return result.ok
+        return False
+
+    def _listed(self, result):
+        if isinstance(result, migrate.MigrateResult):
+            return result.warning + "\n" + "\n".join(result.remaining)
+        return str(result)
+
+    def _assert_sneaky_kept(self, victim_dir, result):
+        sneaky = os.path.join(victim_dir, "sneaky.txt")
+        self.assertTrue(os.path.isfile(sneaky))
+        with open(sneaky, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "sneaky-data")
+        self.assertFalse(self._plain_success(result))
+        self.assertIn("sneaky.txt", self._listed(result))
+
+    def test_copy_failure_added_file_survives_and_is_not_success(self):
+        src = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(src, "a.txt"), "w", encoding="utf-8") as handle:
+                handle.write("keep")
+
+            def robocopy(source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                for name in os.listdir(source):
+                    sp = os.path.join(source, name)
+                    if os.path.isfile(sp) and not os.path.islink(sp):
+                        shutil.copy2(sp, os.path.join(dest, name))
+                return 16
+
+            victim = None
+
+            def robocopy_capture(source, dest, move):
+                nonlocal victim
+                victim = dest
+                return robocopy(source, dest, move)
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=robocopy_capture), \
+                    mock.patch.object(migrate, "is_junction", return_value=False):
+                # Hooks are bound after robocopy creates dest; plant uses the dest path.
+                real_remove = os.remove
+                real_open = os.open
+                planted = {"done": False}
+
+                def plant():
+                    if planted["done"] or not victim:
+                        return
+                    planted["done"] = True
+                    with open(os.path.join(victim, "sneaky.txt"), "w", encoding="utf-8") as handle:
+                        handle.write("sneaky-data")
+
+                def remove(path, *args, **kwargs):
+                    if victim and str(path).startswith(victim):
+                        plant()
+                    return real_remove(path, *args, **kwargs)
+
+                def hooked_open(path, flags, *args, **kwargs):
+                    directory = bool(flags & getattr(os, "O_DIRECTORY", 0))
+                    if victim and not directory and os.path.basename(str(path)) == "a.txt":
+                        plant()
+                    return real_open(path, flags, *args, **kwargs)
+
+                with mock.patch("migrate.os.remove", side_effect=remove), \
+                        mock.patch("migrate.os.open", side_effect=hooked_open):
+                    try:
+                        result = migrate.migrate(src, dest_root)
+                    except migrate.MigrateError as exc:
+                        result = exc
+            self._assert_sneaky_kept(victim, result)
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+
+    def test_junction_failure_added_file_survives_and_is_not_success(self):
+        src = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(src, "a.txt"), "w", encoding="utf-8") as handle:
+                handle.write("keep")
+
+            def robocopy(source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                for name in os.listdir(source):
+                    sp = os.path.join(source, name)
+                    if os.path.isfile(sp) and not os.path.islink(sp):
+                        shutil.copy2(sp, os.path.join(dest, name))
+                return 1
+
+            victim = {"path": ""}
+
+            def capture_robocopy(source, dest, move):
+                victim["path"] = dest
+                return robocopy(source, dest, move)
+
+            real_remove = os.remove
+            real_open = os.open
+            planted = {"done": False}
+
+            def plant():
+                if planted["done"] or not victim["path"]:
+                    return
+                planted["done"] = True
+                with open(os.path.join(victim["path"], "sneaky.txt"), "w", encoding="utf-8") as handle:
+                    handle.write("sneaky-data")
+
+            def remove(path, *args, **kwargs):
+                if victim["path"] and str(path).startswith(victim["path"]):
+                    plant()
+                return real_remove(path, *args, **kwargs)
+
+            def hooked_open(path, flags, *args, **kwargs):
+                directory = bool(flags & getattr(os, "O_DIRECTORY", 0))
+                if victim["path"] and not directory and os.path.basename(str(path)) == "a.txt":
+                    plant()
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=capture_robocopy), \
+                    mock.patch.object(migrate, "create_junction",
+                                      side_effect=lambda link, target: os.makedirs(link, exist_ok=True)), \
+                    mock.patch.object(migrate, "junction_works", return_value=False), \
+                    mock.patch.object(migrate, "is_junction", return_value=False), \
+                    mock.patch("migrate.os.remove", side_effect=remove), \
+                    mock.patch("migrate.os.open", side_effect=hooked_open):
+                try:
+                    result = migrate.migrate(src, dest_root)
+                except migrate.MigrateError as exc:
+                    result = exc
+            self._assert_sneaky_kept(victim["path"], result)
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+
+    def test_rollback_added_file_survives_and_is_not_success(self):
+        src = tempfile.mkdtemp()
+        dest = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(dest, "a.txt"), "w", encoding="utf-8") as handle:
+                handle.write("copied")
+
+            def robocopy(source, target, move):
+                os.makedirs(target, exist_ok=True)
+                for name in os.listdir(source):
+                    sp = os.path.join(source, name)
+                    if os.path.isfile(sp) and not os.path.islink(sp):
+                        shutil.copy2(sp, os.path.join(target, name))
+                return 1
+
+            real_remove = os.remove
+            real_open = os.open
+            planted = {"done": False}
+
+            def plant():
+                if planted["done"]:
+                    return
+                planted["done"] = True
+                with open(os.path.join(dest, "sneaky.txt"), "w", encoding="utf-8") as handle:
+                    handle.write("sneaky-data")
+
+            def remove(path, *args, **kwargs):
+                if str(path).startswith(dest):
+                    plant()
+                return real_remove(path, *args, **kwargs)
+
+            def hooked_open(path, flags, *args, **kwargs):
+                directory = bool(flags & getattr(os, "O_DIRECTORY", 0))
+                if not directory and os.path.basename(str(path)) == "a.txt":
+                    plant()
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
+                    mock.patch("migrate.os.remove", side_effect=remove), \
+                    mock.patch("migrate.os.open", side_effect=hooked_open):
+                try:
+                    result = migrate._rollback_to_source(src, dest)
+                except migrate.MigrateError as exc:
+                    result = exc
+            self._assert_sneaky_kept(dest, result)
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest, ignore_errors=True)
+
+    def test_undo_added_file_survives_and_is_not_success(self):
+        src = tempfile.mkdtemp()
+        target = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(target, "a.txt"), "w", encoding="utf-8") as handle:
+                handle.write("moved")
+
+            def robocopy(source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                for name in os.listdir(source):
+                    sp = os.path.join(source, name)
+                    if os.path.isfile(sp) and not os.path.islink(sp) and name != "sneaky.txt":
+                        shutil.copy2(sp, os.path.join(dest, name))
+                return 1
+
+            real_remove = os.remove
+            real_open = os.open
+            planted = {"done": False}
+
+            def plant():
+                if planted["done"]:
+                    return
+                planted["done"] = True
+                with open(os.path.join(target, "sneaky.txt"), "w", encoding="utf-8") as handle:
+                    handle.write("sneaky-data")
+
+            def remove(path, *args, **kwargs):
+                if str(path).startswith(target):
+                    plant()
+                return real_remove(path, *args, **kwargs)
+
+            def hooked_open(path, flags, *args, **kwargs):
+                directory = bool(flags & getattr(os, "O_DIRECTORY", 0))
+                if not directory and os.path.basename(str(path)) == "a.txt":
+                    plant()
+                return real_open(path, flags, *args, **kwargs)
+
+            def is_junction(path):
+                return os.path.abspath(path) == os.path.abspath(src)
+
+            with mock.patch.object(migrate, "is_junction", side_effect=is_junction), \
+                    mock.patch.object(migrate, "junction_target", return_value=target), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
+                    mock.patch("migrate.os.remove", side_effect=remove), \
+                    mock.patch("migrate.os.open", side_effect=hooked_open):
+                try:
+                    result = migrate.undo(src)
+                except migrate.MigrateError as exc:
+                    result = exc
+            self._assert_sneaky_kept(target, result)
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(target, ignore_errors=True)
+
+    def test_restore_renamed_source_added_file_survives_and_is_not_success(self):
+        src = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(src, "a.txt"), "w", encoding="utf-8") as handle:
+                handle.write("keep")
+
+            def robocopy(source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                for name in os.listdir(source):
+                    sp = os.path.join(source, name)
+                    if os.path.isfile(sp) and not os.path.islink(sp):
+                        shutil.copy2(sp, os.path.join(dest, name))
+                return 1
+
+            real_rmdir = os.rmdir
+            planted = {"done": False}
+
+            def rmdir(path, *args, **kwargs):
+                if os.path.abspath(path) == os.path.abspath(src) and not planted["done"]:
+                    planted["done"] = True
+                    with open(os.path.join(path, "sneaky.txt"), "w", encoding="utf-8") as handle:
+                        handle.write("sneaky-data")
+                return real_rmdir(path, *args, **kwargs)
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
+                    mock.patch.object(migrate, "create_junction",
+                                      side_effect=lambda link, target: os.makedirs(link, exist_ok=True)), \
+                    mock.patch.object(migrate, "junction_works", return_value=False), \
+                    mock.patch.object(migrate, "is_junction", return_value=False), \
+                    mock.patch("migrate.os.rmdir", side_effect=rmdir):
+                try:
+                    result = migrate.migrate(src, dest_root)
+                except Exception as exc:
+                    result = exc
+            self._assert_sneaky_kept(src, result)
+            backup = src.rstrip("\\/") + ".migrate-bak"
+            self.assertTrue(os.path.isfile(os.path.join(backup, "a.txt")))
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+            shutil.rmtree(src.rstrip("\\/") + ".migrate-bak", ignore_errors=True)
 
 
 class FragVizTests(unittest.TestCase):
