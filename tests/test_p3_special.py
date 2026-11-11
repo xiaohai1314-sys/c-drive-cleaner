@@ -192,7 +192,7 @@ class P3RuleRegressionTests(unittest.TestCase):
         self.assertFalse(scanner.name_allowed("photo.JPG", cat))
         self.assertTrue(scanner.name_allowed("report.pdf.tmp", cat))
         with tempfile.TemporaryDirectory() as tmp:
-            for name in ("report.pdf", "REPORT.PDF", "photo.JPG", "cache.tmp",
+            for name in ("report.pdf", "cover.PDF", "photo.JPG", "cache.tmp",
                          "report.pdf.tmp"):
                 with open(os.path.join(tmp, name), "wb") as handle:
                     handle.write(b"x")
@@ -201,7 +201,7 @@ class P3RuleRegressionTests(unittest.TestCase):
             result = cleaner.clean_category(cat)
             self.assertEqual(result.deleted, 2)
             self.assertEqual(sorted(os.listdir(tmp)),
-                             ["REPORT.PDF", "photo.JPG", "report.pdf"])
+                             ["cover.PDF", "photo.JPG", "report.pdf"])
 
     def test_log_rules_are_separate_and_warn_before_selection(self):
         rules = self._new_rules()
