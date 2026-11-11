@@ -469,11 +469,23 @@ def _windows_unlink_noreparse(path: str, allowed):
     share = 0x1 | 0x2 | 0x4
     open_existing = 3
     flag = 0x00200000 | 0x02000000  # OPEN_REPARSE_POINT | BACKUP_SEMANTICS
-    kernel = ctypes.windll.kernel32
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.restype = ctypes.c_void_p
+    kernel.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    kernel.GetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel.GetFileInformationByHandle.restype = wintypes.BOOL
+    kernel.SetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE, ctypes.c_uint, ctypes.c_void_p, wintypes.DWORD,
+    ]
+    kernel.SetFileInformationByHandle.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
     handle = kernel.CreateFileW(
-        path, delete_access | generic_read, share, None, open_existing, flag, None)
+        str(path), delete_access | generic_read, share, None, open_existing, flag, None)
     invalid = ctypes.c_void_p(-1).value
-    if handle in (0, invalid, -1):
+    if not handle or handle in (invalid, -1):
         raise OSError("无法打开文件")
     try:
         class _ByHandle(ctypes.Structure):

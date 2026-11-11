@@ -75,12 +75,53 @@ SIDEBAR = [
     ("shred", "文件粉碎", "粉", "#e74c3c"),
 ]
 
+IM_BULK_KINDS = ("cache", "log")
 BIG_KINDS = ("all", "video", "music", "document", "image", "archive", "other")
 DUP_KINDS = ("video", "music", "document", "image", "archive", "installer", "other")
 
 ICON_COLORS = ["#2f80ed", "#16a085", "#8e44ad", "#e67e22", "#4b6cb7",
                "#07c160", "#12b7f5", "#e74c3c", "#d35400", "#2980b9",
                "#c0392b", "#27ae60"]
+
+
+def _shred_media_warning(media_types):
+    solid = sorted(drive for drive, is_ssd in (media_types or {}).items() if is_ssd is True)
+    unknown = sorted(drive for drive, is_ssd in (media_types or {}).items() if is_ssd is None)
+    lines = []
+    if solid:
+        lines.append(
+            "注意：" + "、".join(solid) +
+            " 是固态硬盘。覆盖写入不能保证原数据被擦掉；请勿把粉碎视为 SSD 的可靠擦除。")
+    if unknown:
+        lines.append(
+            "无法确认 " + "、".join(unknown) +
+            " 的介质类型。覆盖写入不能保证原数据不可恢复，尤其是 SSD/闪存。")
+    return "\n\n" + "\n".join(lines) if lines else ""
+
+
+def _recycle_failure_lines(reasons, failed_paths=()):
+    """把未删除的文件按原因分组，告诉用户为什么没删。"""
+    labels = (
+        ("changed", "扫描后文件内容或属性变了，为安全已跳过"),
+        ("missing", "文件已不存在"),
+        ("recycle", "移入回收站失败（可能被占用或没有权限）"),
+    )
+    lines = []
+    listed = set()
+    for key, label in labels:
+        paths = list((reasons or {}).get(key) or [])
+        if not paths:
+            continue
+        lines.append(f"{label}：{len(paths)} 个")
+        lines.extend("  " + path for path in paths[:8])
+        if len(paths) > 8:
+            lines.append(f"  …另有 {len(paths) - 8} 个")
+        listed.update(paths)
+    rest = [path for path in failed_paths or [] if path not in listed]
+    if rest:
+        lines.append(f"其他原因：{len(rest)} 个")
+        lines.extend("  " + path for path in rest[:8])
+    return lines
 
 
 def _round_rect(canvas, x1, y1, x2, y2, r, **kwargs):
@@ -232,6 +273,7 @@ class App(_TkRoot):
         self.privacy_mode = "progress"
         self.privacy_step = ""
         self.privacy_done_steps = 0
+        self.privacy_scan_error = ""
         self._privacy_running = False
         self.bigmove_rows = []
         self.bigmove_checked = set()
@@ -410,6 +452,30 @@ class App(_TkRoot):
         GreenButton(row, button_text, command).pack(side="right", pady=(4, 0))
         return row
 
+    def _kind_tab(self, parent, label, size_text, active, on_click, tick_var=None, on_tick=None):
+        """类型页签：选中项是蓝色圆角块，其余是正文加灰色小号大小。可选在前面放一个勾选框。"""
+        piece = tk.Frame(parent, bg=WHITE)
+        piece.pack(side="left", padx=(0, 6))
+        if tick_var is not None:
+            look.Tick(piece, tick_var, command=on_tick, bg=WHITE, size=14).pack(side="left", padx=(0, 3))
+        bg = BLUE if active else WHITE
+        inner = tk.Frame(piece, bg=bg, cursor="hand2")
+        inner.pack(side="left")
+        name = tk.Label(inner, text=label, bg=bg, fg="white" if active else TEXT,
+                        font=look.tk_font(10, active), padx=0, pady=4, cursor="hand2")
+        widgets = [inner, name]
+        if size_text:
+            name.pack(side="left", padx=(12 if active else 4, 2))
+            size = tk.Label(inner, text=f"({size_text})", bg=bg, fg="white" if active else MUTED,
+                            font=look.tk_font(9), pady=4, cursor="hand2")
+            size.pack(side="left", padx=(0, 12 if active else 4))
+            widgets.append(size)
+        else:
+            name.pack(side="left", padx=12 if active else 4)
+        for widget in widgets:
+            widget.bind("<Button-1>", lambda _e: on_click())
+        return piece
+
     def _scrollable(self, parent, bg=WHITE):
         canvas = tk.Canvas(parent, bg=bg, highlightthickness=0)
         scroll = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
@@ -422,38 +488,73 @@ class App(_TkRoot):
         scroll.pack(side="right", fill="y")
         return inner
 
+    def _flow(self, grid, cards, cell_width):
+        """按容器实际宽度决定每行放几张卡，窗口缩放时重新排，不会把右侧卡片挤出可视区。"""
+        state = {"columns": 0}
+
+        def layout(_event=None):
+            width = grid.winfo_width()
+            if width <= 1:
+                width = max(grid.winfo_reqwidth(), cell_width)
+            columns = max(1, width // cell_width)
+            if columns == state["columns"]:
+                return
+            state["columns"] = columns
+            for index, card in enumerate(cards):
+                card.grid(row=index // columns, column=index % columns, padx=4, pady=6)
+
+        grid.bind("<Configure>", layout)
+        layout()
+
     def _card_grid(self, parent, cats, checked_set, on_toggle):
         grid = tk.Frame(parent, bg=PAGE)
         grid.pack(fill="x", padx=18, pady=(4, 12))
-        columns = 8
-        for index, cat in enumerate(cats):
-            card = tk.Frame(grid, bg=CARD, highlightbackground="#e7eef5",
-                            highlightthickness=1, width=112, height=132)
-            card.grid(row=index // columns, column=index % columns, padx=6, pady=6)
+        cards = []
+        for cat in cats:
+            card = tk.Frame(grid, bg=PAGE, width=96, height=124)
+            cards.append(card)
             card.pack_propagate(False)
             checked = cat.key in checked_set
             var = tk.BooleanVar(value=checked)
             self._card_vars.append(var)
             art = self._app_icon(cat.name) or look.category_icon(cat.name, False)
             self._photos.append(art)
-            holder = tk.Frame(card, bg=CARD)
-            holder.pack(pady=(8, 0))
-            tk.Label(holder, image=art, bg=CARD).pack()
+            holder = tk.Frame(card, bg=PAGE)
+            holder.pack(pady=(6, 0))
+            tk.Label(holder, image=art, bg=PAGE).pack()
             look.Tick(holder, var, command=lambda c=cat, v=var: on_toggle(c, v.get()),
-                      bg=CARD, size=16).place_over(holder)
-            name = tk.Label(card, text=cat.name, bg=CARD, fg=TEXT,
-                            font=look.tk_font(8), wraplength=100, justify="center")
-            name.pack(pady=(2, 0))
+                      bg=PAGE, size=16).place_over(holder)
+            name = tk.Label(card, text=cat.name, bg=PAGE, fg=TEXT,
+                            font=look.tk_font(9), wraplength=92, justify="center")
+            name.pack(pady=(4, 0))
             Pill(card, self._size_text(cat.key), ORANGE).pack(pady=(2, 6))
+            tip = look.Tooltip(card, lambda c=cat: self._cat_tip(c))
+            for child in look._descendants(card):
+                tip.bind(child)
+        self._flow(grid, cards, 104)
 
-    def _section_title(self, parent, text, note=""):
+    def _section_title(self, parent, text, note="", extra=None, collapsed=None, on_toggle=None):
         row = tk.Frame(parent, bg=WHITE)
-        row.pack(fill="x", padx=16, pady=(8, 2))
+        row.pack(fill="x", padx=16, pady=(10, 2))
+        if on_toggle is not None:
+            arrow = tk.Label(row, text="展开" if collapsed else "收起", bg=WHITE, fg=MUTED,
+                             cursor="hand2", font=look.tk_font(9))
+            arrow.pack(side="right", padx=(10, 0))
+            # 用具名函数：tkinter 按 id+函数名注册回调，lambda 被回收后 id 复用会被别的 after 误调用。
+            def fold_section(_event=None):
+                on_toggle()
+            arrow.bind("<Button-1>", fold_section)
         tk.Label(row, text="● " + text, bg=WHITE, fg=TEXT,
                  font=("Microsoft YaHei UI", 10, "bold")).pack(side="left")
+        extra_label = None
+        if extra is not None:
+            extra_label = tk.Label(row, text=extra, bg=WHITE, fg=ORANGE,
+                                   font=("Microsoft YaHei UI", 9))
+            extra_label.pack(side="left", padx=(10, 0))
         if note:
             tk.Label(row, text=note, bg=WHITE, fg=MUTED,
-                     font=("Microsoft YaHei UI", 9)).pack(side="left", padx=(10, 0))
+                     font=("Microsoft YaHei UI", 9)).pack(side="right", padx=(10, 0))
+        return extra_label
 
     def _make_tree(self, parent, columns):
         frame = tk.Frame(parent, bg=WHITE)
@@ -481,6 +582,10 @@ class App(_TkRoot):
         if len(text) >= 2 and text[1] == ":":
             return text[:2]
         return ""
+
+    def _disk_label(self, path):
+        drive = self._disk_of(path)
+        return drive[:1].upper() + "盘" if drive else ""
 
     def _fmt_time(self, stamp):
         try:
@@ -675,7 +780,11 @@ class App(_TkRoot):
         qq_total = self._im_total("qq")
         big_total = sum(row[1] for row in self.big_rows)
         dup_total = sum(g["size"] * max(len(g["files"]) - 1, 0) for g in self.dup_groups)
-        privacy_count = sum(int(item.get("count") or 0) for item in self.privacy_records)
+        available_privacy = [item for item in self.privacy_records
+                             if item.get("count_available", True)]
+        privacy_count = sum(int(item.get("count") or 0) for item in available_privacy)
+        privacy_unknown = any(not item.get("count_available", True)
+                              for item in self.privacy_records)
         frag_count = (self.frag_analysis or {}).get("count") or 0
 
         def text(value):
@@ -684,7 +793,9 @@ class App(_TkRoot):
         mapping = {
             "clean": text(clean_total),
             "frag": f"[{frag_count}]" if frag_count else "",
-            "privacy": f"[{privacy_count}]" if privacy_count else text(privacy_total),
+            "privacy": (f"[{privacy_count}+]" if privacy_count and privacy_unknown
+                        else f"[{privacy_count}]" if privacy_count
+                        else "[?]" if privacy_unknown else text(privacy_total)),
             "big": text(big_total), "dup": text(dup_total),
             "wechat": text(wechat_total), "qq": text(qq_total), "shred": "",
         }
@@ -713,21 +824,60 @@ class App(_TkRoot):
         cats = self._clean_categories()
         recommended = [c for c in cats if not c.requires_confirm and c.tier != categories.DEEP]
         confirm = [c for c in cats if c.requires_confirm or c.tier == categories.DEEP]
-        rec_on = sum(1 for cat in recommended if cat.key in self.selected)
-        self._section_title(self.clean_body, "推荐清理项",
-                            f"已选{rec_on}/{len(recommended)}  系统和软件的垃圾和无用文件，可放心清理")
-        self._card_grid(self.clean_body, recommended, self.selected, self._toggle_clean)
-        if confirm:
-            conf_on = sum(1 for cat in confirm if cat.key in self.selected)
-            self._section_title(self.clean_body, "谨慎清理项",
-                                f"已选{conf_on}/{len(confirm)}  系统和软件的数据缓存，可按需选择")
-            self._card_grid(self.clean_body, confirm, self.selected, self._toggle_clean)
+        self._clean_sections = []
+        folded = getattr(self, "_clean_folded", set())
+        self._clean_folded = folded
+        for key, title, note, cats in (("rec", "推荐清理项", "系统和软件的垃圾和无用文件，可放心清理", recommended),
+                                       ("confirm", "谨慎清理项", "系统和软件的数据缓存，可按需选择", confirm)):
+            if not cats:
+                continue
+            label = self._section_title(self.clean_body, title, note, extra=self._section_sizes(cats),
+                                        collapsed=key in folded,
+                                        on_toggle=lambda k=key: self._fold_clean(k))
+            self._clean_sections.append((label, cats))
+            if key not in folded:
+                self._card_grid(self.clean_body, cats, self.selected, self._toggle_clean)
+
+    def _fold_clean(self, key):
+        if key in self._clean_folded:
+            self._clean_folded.discard(key)
+        else:
+            self._clean_folded.add(key)
+        self.after(1, self._refresh_clean_cards)
+
+    def _cat_tip(self, cat):
+        """清理卡片的悬停说明：做什么、动哪些位置，让人知道删的是什么。"""
+        lines = [cat.describe or cat.name]
+        paths = list(cat.paths or [])
+        if paths:
+            lines.append("")
+            lines.extend(paths[:4])
+            if len(paths) > 4:
+                lines.append(f"…等 {len(paths)} 个位置")
+        elif cat.command:
+            lines.append("")
+            lines.append("通过系统命令清理：" + " ".join(str(part) for part in cat.command[:3]))
+        if cat.warning:
+            lines.append("")
+            lines.append("注意：" + cat.warning)
+        return "\n".join(lines)
+
+    def _section_sizes(self, cats):
+        def size(cat):
+            item = self.results.get(cat.key)
+            return item[0] if item and item[0] and item[0] > 0 else 0
+        total = sum(size(cat) for cat in cats)
+        chosen = sum(size(cat) for cat in cats if cat.key in self.selected)
+        return f"已选{utils.fmt_size(chosen)}/共{utils.fmt_size(total)}"
 
     def _toggle_clean(self, cat, value):
         if value:
             self.selected.add(cat.key)
         else:
             self.selected.discard(cat.key)
+        for label, cats in getattr(self, "_clean_sections", []):
+            if label is not None:
+                label.configure(text=self._section_sizes(cats))
         self._update_clean_head()
 
     def _update_clean_head(self):
@@ -807,7 +957,8 @@ class App(_TkRoot):
                     report = (proc.stderr or b"").decode("mbcs", "replace")
             except Exception:
                 report = ""
-            self.queue.put(("frag_stats", fragviz.parse_defrag_report(report), drive))
+            self.queue.put(("frag_stats", fragviz.parse_defrag_report(report), drive,
+                            utils.is_ssd(drive)))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -847,6 +998,7 @@ class App(_TkRoot):
         self._privacy_running = True
         self.privacy_mode = "progress"
         self.privacy_records = []
+        self.privacy_scan_error = ""
         self.privacy_step = "准备扫描"
         self._render_privacy()
 
@@ -854,12 +1006,14 @@ class App(_TkRoot):
             def progress(name, partial):
                 self.queue.put(("privacy_progress", name, partial))
 
+            error = ""
             try:
                 records = privacy.scan(progress)
-            except Exception:
+            except Exception as exc:
                 records = []
+                error = str(exc) or exc.__class__.__name__
             self._privacy_running = False
-            self.queue.put(("privacy_scan_done", records))
+            self.queue.put(("privacy_scan_done", records, error))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -891,13 +1045,20 @@ class App(_TkRoot):
         info = tk.Frame(row, bg=WHITE)
         info.pack(side="left", fill="both", expand=True, padx=10)
         for key, title, _note in privacy.SECTIONS:
-            count = sum(int(item.get("count") or 0) for item in self.privacy_records
-                        if item.get("section") == key)
+            items = [item for item in self.privacy_records if item.get("section") == key]
+            count = sum(int(item.get("count") or 0) for item in items
+                        if item.get("count_available", True))
+            unavailable = any(not item.get("count_available", True) for item in items)
             line = tk.Frame(info, bg=WHITE)
             line.pack(fill="x", pady=4)
             tk.Label(line, text=title, bg=WHITE, fg=TEXT,
                      font=("Microsoft YaHei UI", 10)).pack(side="left")
-            shown = f"{count} 条" if key in seen else "等待扫描"
+            if key not in seen:
+                shown = "等待扫描"
+            elif unavailable:
+                shown = f"已识别 {count} 条，部分不可用" if count else "数据源不可用"
+            else:
+                shown = f"{count} 条"
             tk.Label(line, text=shown, bg=WHITE, fg=ORANGE if key in seen else MUTED,
                      font=("Microsoft YaHei UI", 10, "bold")).pack(side="right")
         scanning = self.privacy_step or "准备扫描"
@@ -905,35 +1066,60 @@ class App(_TkRoot):
                  font=("Microsoft YaHei UI", 10)).pack(anchor="w", pady=(16, 0))
 
     def _render_privacy_result(self, body):
-        total = sum(int(item.get("count") or 0) for item in self.privacy_records)
+        total = sum(int(item.get("count") or 0) for item in self.privacy_records
+                    if item.get("count_available", True))
+        unavailable = sum(1 for item in self.privacy_records
+                          if not item.get("count_available", True))
         chosen = sum(int(item.get("count") or 0) for item in self.privacy_records
-                     if item.get("id") in self.privacy_selected)
+                     if item.get("id") in self.privacy_selected
+                     and item.get("count_available", True))
         if getattr(self, "privacy_head", None):
             for child in self.privacy_head.winfo_children():
                 child.destroy()
             left = tk.Frame(self.privacy_head, bg=PAGE)
             left.pack(side="left", fill="x", expand=True)
-            self._headline(left, [
-                (str(total), RED, True, 28), (" 条隐私记录", TEXT, True, 18),
-            ]).pack(anchor="w")
+            if self.privacy_scan_error:
+                headline = [("扫描失败", RED, True, 28), (" 无法确认隐私记录", TEXT, True, 18)]
+            elif unavailable and not total:
+                headline = [("—", RED, True, 28), (f" {unavailable} 个数据源不可用", TEXT, True, 18)]
+            elif unavailable:
+                headline = [(str(total), RED, True, 28),
+                            (f" 条可识别记录，另有 {unavailable} 个源不可用", TEXT, True, 18)]
+            else:
+                headline = [(str(total), RED, True, 28), (" 条隐私记录", TEXT, True, 18)]
+            self._headline(left, headline).pack(anchor="w")
             GreenButton(self.privacy_head, "一键清理", self._privacy_clean).pack(side="right")
         if getattr(self, "privacy_sub", None):
-            self.privacy_sub.configure(text=f"已选择 {chosen} 条隐私，清理后防止泄露您的小秘密。已保存的密码不会删除。")
+            suffix = f"另有 {unavailable} 个数据源不可用。" if unavailable else ""
+            if self.privacy_scan_error:
+                suffix = "扫描未完成，无法确认数据源状态。"
+            self.privacy_sub.configure(
+                text=f"已选择 {chosen} 条可识别记录。{suffix}已保存的密码不会删除。")
+        if self.privacy_scan_error and not self.privacy_records:
+            tk.Label(body, text=f"隐私扫描失败：{self.privacy_scan_error}",
+                     bg=WHITE, fg=RED, font=look.tk_font(10), wraplength=640,
+                     justify="left").pack(anchor="w", padx=20, pady=20)
         for key, title, note in privacy.SECTIONS:
             items = [item for item in self.privacy_records if item.get("section") == key]
             if not items:
                 continue
-            section_count = sum(int(item.get("count") or 0) for item in items)
-            self._section_title(body, f"{title}（共{section_count}条）", note)
+            section_count = sum(int(item.get("count") or 0) for item in items
+                                if item.get("count_available", True))
+            section_unavailable = any(not item.get("count_available", True) for item in items)
+            if section_unavailable and not section_count:
+                section_label = "数据源不可用"
+            elif section_unavailable:
+                section_label = f"已识别{section_count}条，部分不可用"
+            else:
+                section_label = f"共{section_count}条"
+            self._section_title(body, f"{title}（{section_label}）", note)
             grid = tk.Frame(body, bg=WHITE)
             grid.pack(fill="x", padx=14, pady=(2, 8))
-            for index, item in enumerate(items):
-                self._privacy_card(grid, item, index)
+            cards = [self._privacy_card(grid, item, index) for index, item in enumerate(items)]
+            self._flow(grid, cards, 104)
 
     def _privacy_card(self, grid, item, index):
-        card = tk.Frame(grid, bg=CARD, highlightbackground="#e7eef5", highlightthickness=1,
-                        width=120, height=132)
-        card.grid(row=index // 6, column=index % 6, padx=6, pady=6)
+        card = tk.Frame(grid, bg=WHITE, width=96, height=124)
         card.pack_propagate(False)
         selectable = privacy.is_selectable(item)
         var = tk.BooleanVar(value=selectable and item["id"] in self.privacy_selected)
@@ -942,16 +1128,20 @@ class App(_TkRoot):
             self.privacy_selected.discard(item["id"])
         art = look.category_icon(item.get("name", "项"), False)
         self._photos.append(art)
-        holder = tk.Frame(card, bg=CARD)
-        holder.pack(pady=(8, 0))
-        tk.Label(holder, image=art, bg=CARD).pack()
+        holder = tk.Frame(card, bg=WHITE)
+        holder.pack(pady=(6, 0))
+        tk.Label(holder, image=art, bg=WHITE).pack()
         if selectable:
             look.Tick(holder, var, command=lambda i=item["id"], v=var: self._toggle_privacy(i, v.get()),
-                      bg=CARD, size=16).place_over(holder)
-        tk.Label(card, text=item.get("name", ""), bg=CARD, fg=TEXT,
-                 font=look.tk_font(8), wraplength=108, justify="center").pack()
+                      bg=WHITE, size=16).place_over(holder)
+        tk.Label(card, text=item.get("name", ""), bg=WHITE, fg=TEXT,
+                 font=look.tk_font(9), wraplength=92, justify="center").pack(pady=(4, 0))
         count = int(item.get("count") or 0)
-        Pill(card, f"{count} 条", ORANGE if count else GREEN).pack(pady=(2, 4))
+        if not item.get("count_available", True):
+            Pill(card, "不可用", ORANGE).pack(pady=(2, 4))
+        else:
+            Pill(card, f"{count} 条", ORANGE if count else GREEN).pack(pady=(2, 4))
+        return card
 
     def _toggle_privacy(self, key, value):
         if value:
@@ -959,12 +1149,17 @@ class App(_TkRoot):
         else:
             self.privacy_selected.discard(key)
         if self.privacy_mode == "result":
-            total = sum(int(item.get("count") or 0) for item in self.privacy_records)
+            total = sum(int(item.get("count") or 0) for item in self.privacy_records
+                        if item.get("count_available", True))
             chosen = sum(int(item.get("count") or 0) for item in self.privacy_records
-                         if item.get("id") in self.privacy_selected)
+                         if item.get("id") in self.privacy_selected
+                         and item.get("count_available", True))
             if getattr(self, "privacy_sub", None):
+                unavailable = sum(1 for item in self.privacy_records
+                                  if not item.get("count_available", True))
+                suffix = f"；另有 {unavailable} 个数据源不可用" if unavailable else ""
                 self.privacy_sub.configure(
-                    text=f"共 {total} 条隐私记录，已选择 {chosen} 条。已保存的密码不会删除。")
+                    text=f"共 {total} 条可识别记录，已选择 {chosen} 条{suffix}。已保存的密码不会删除。")
 
     def _privacy_clean(self):
         if self._cleaning or self._privacy_running:
@@ -985,10 +1180,14 @@ class App(_TkRoot):
         def work():
             try:
                 result = privacy.apply_plan(plan)
-            except Exception:
-                result = {"files": 0, "sql": 0, "registry": 0, "failed": []}
+            except Exception as exc:
+                result = {
+                    "files": 0, "sql": 0, "registry": 0,
+                    "failed": [f"隐私清理异常：{exc}"],
+                }
             lines = ["开始清理", "清理：隐私痕迹",
                      f"清理结束，共释放 {result.get('files', 0)} 个文件"]
+            lines.extend(f"清理失败：{item}" for item in result.get("failed") or [])
             self._write_clean_log(lines)
             self._cleaning = False
             self.queue.put(("privacy_cleaned", result))
@@ -1002,30 +1201,79 @@ class App(_TkRoot):
         self.big_sub = tk.Label(parent, text="扫描磁盘中的大文件（>100 MB），删除前会先预览，默认移到回收站",
                                 bg=WHITE, fg=MUTED, font=("Microsoft YaHei UI", 9))
         self.big_sub.pack(anchor="w", padx=18)
+        # 参考图里大文件页固定扫全部磁盘，磁盘筛选放在表头「磁盘：全部 ▾」里。
         self.big_scope = tk.StringVar(value="全部磁盘")
-        self._drive_tabs(parent, ["全部磁盘"] + utils.fixed_drives(),
-                         self.big_scope, self._rescan_big)
-        tabs = tk.Frame(parent, bg=WHITE)
-        tabs.pack(fill="x", padx=18, pady=(8, 0))
-        self.big_tab_labels = {}
-        for key in BIG_KINDS:
-            label = tk.Label(tabs, text=key, bg=WHITE, fg=TEXT, padx=8, pady=4, cursor="hand2",
-                             font=("Microsoft YaHei UI", 9))
-            label.pack(side="left", padx=(0, 4))
-            label.bind("<Button-1>", lambda _e, value=key: self._set_big_type(value))
-            self.big_tab_labels[key] = label
-        filt = tk.Frame(parent, bg=PAGE)
-        filt.pack(fill="x", padx=18, pady=(6, 0))
-        tk.Label(filt, text="磁盘", bg=PAGE, fg=MUTED, font=look.tk_font(9)).pack(side="left")
+        self.big_tabs = tk.Frame(parent, bg=WHITE)
+        self.big_tabs.pack(fill="x", padx=18, pady=(12, 0))
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=18, pady=(6, 0))
+        self.big_tab_labels = {key: None for key in BIG_KINDS}
         self.big_disk_filter = tk.StringVar(value="全部")
-        tk.OptionMenu(filt, self.big_disk_filter, "全部", "C:", "D:", "E:", "F:",
-                      command=lambda _value: self._render_big()).pack(side="left", padx=6)
         self.big_table = look.FileTable(
             parent,
-            (("check", "", 36), ("name", "文件名称", 420), ("disk", "磁盘", 70),
-             ("size", "文件大小", 100), ("mtime", "修改时间", 150)),
-            on_toggle=self._toggle_big_path, on_sort=self._sort_big, bg=PAGE)
+            (("check", "", 40), ("name", "文件名称", 420), ("disk", "磁盘：全部 ▾", 110),
+             ("size", "文件大小", 100), ("mtime", "修改时间", 140)),
+            on_toggle=self._toggle_big_path, on_sort=self._sort_big, bg=PAGE,
+            on_header=self._big_disk_menu, on_menu=self._file_menu, on_open=self._open_file)
+        self.big_table.set_sort(self.big_sort_key, self.big_sort_desc)
         self.big_tree = None
+
+    def _file_menu(self, path, event):
+        """文件行右键：打开所在位置；C 盘文件可以直接送去大文件搬家。"""
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="打开文件", command=lambda: self._open_file(path))
+        menu.add_command(label="打开所在位置", command=lambda: self._reveal_file(path))
+        if self._disk_of(path).upper() == "C:" and "bigmove" in self.pages:
+            menu.add_separator()
+            menu.add_command(label="搬到其他盘…", command=lambda: self._send_to_bigmove([path]))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _open_file(self, path):
+        if os.name != "nt" or not os.path.exists(path):
+            return
+        try:
+            os.startfile(path)
+        except OSError as exc:
+            messagebox.showerror("打不开", str(exc))
+
+    def _reveal_file(self, path):
+        if os.name != "nt":
+            return
+        try:
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+        except OSError:
+            pass
+
+    def _send_to_bigmove(self, paths):
+        known = {row[0] for row in self.bigmove_rows}
+        for path in paths:
+            if path in known:
+                continue
+            try:
+                size = os.path.getsize(path)
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            self.bigmove_rows.append((path, size, mtime))
+        self._render_bigmove()
+        self.bigmove_checked.update(path for path in paths if path in {row[0] for row in self.bigmove_rows})
+        self._render_bigmove(keep_checked=True)
+        self._show_page("bigmove")
+
+    def _big_disk_menu(self, key, event):
+        if key != "disk":
+            return
+        menu = tk.Menu(self, tearoff=0)
+        disks = sorted({self._disk_of(row[0]).upper() for row in self.big_rows if self._disk_of(row[0])})
+        for value in ["全部"] + disks:
+            menu.add_command(label=value if value == "全部" else value[:1] + "盘",
+                             command=lambda v=value: self._set_big_disk(v))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _set_big_disk(self, value):
+        self.big_disk_filter.set(value)
+        shown = "全部" if value == "全部" else value[:1] + "盘"
+        self.big_table.set_header("disk", f"磁盘：{shown} ▾")
+        self._render_big()
 
     def _set_big_type(self, key):
         self.big_type = key
@@ -1094,12 +1342,15 @@ class App(_TkRoot):
             totals[self._big_kind(path)] = totals.get(self._big_kind(path), 0) + size
         names = {"all": "全部", "video": "视频", "music": "音乐", "document": "文档",
                  "image": "图片", "archive": "压缩包", "other": "其他"}
-        for key, label in self.big_tab_labels.items():
-            text = f"{names.get(key, key)}({utils.fmt_size_compact(totals.get(key, 0))})"
-            if key == self.big_type:
-                label.configure(text=text, bg=BLUE, fg="white")
-            else:
-                label.configure(text=text, bg=PAGE, fg=TEXT)
+        for child in self.big_tabs.winfo_children():
+            child.destroy()
+        for key in BIG_KINDS:
+            size_text = utils.fmt_size(totals.get(key, 0)).replace(" ", "")
+            if key == "all":
+                size_text = ""
+            self._kind_tab(self.big_tabs, names.get(key, key), size_text, key == self.big_type,
+                           lambda value=key: self._set_big_type(value))
+        self.big_table.set_sort(self.big_sort_key, self.big_sort_desc)
         disk_filter = self.big_disk_filter.get() if getattr(self, "big_disk_filter", None) else "全部"
         visible = []
         for path, size, mtime in self.big_rows:
@@ -1118,7 +1369,6 @@ class App(_TkRoot):
             return size
 
         visible.sort(key=sort_value, reverse=self.big_sort_desc)
-        self.big_checked &= {item[0] for item in visible}
         table_rows = []
         for path, size, mtime in visible:
             table_rows.append({
@@ -1126,7 +1376,8 @@ class App(_TkRoot):
                 "checked": path in self.big_checked,
                 "icon": self._kind_icon(path),
                 "name": path,
-                "cells": [(self._disk_of(path), 70), (utils.fmt_size(size), 100),
+                "badge": "半年未动" if mtime and time.time() - mtime > 180 * 86400 else "",
+                "cells": [(self._disk_label(path), 110), (utils.fmt_size(size), 100),
                           (self._fmt_time(mtime), 140)],
             })
         self.big_table.set_rows(table_rows)
@@ -1143,32 +1394,13 @@ class App(_TkRoot):
         ]).pack(anchor="w")
         GreenButton(self.big_head, "一键清理", self._delete_big).pack(side="right")
 
-    def _on_big_click(self, event):
-        item = self.big_tree.identify_row(event.y)
-        column = self.big_tree.identify_column(event.x)
-        if not item or column not in ("#1", "#0"):
-            return
-        try:
-            path = self._big_visible[int(item)]
-        except (ValueError, IndexError):
-            return
-        if path in self.big_checked:
-            self.big_checked.discard(path)
-            mark = self._mark(False)
-        else:
-            self.big_checked.add(path)
-            mark = self._mark(True)
-        values = list(self.big_tree.item(item, "values"))
-        values[0] = mark
-        self.big_tree.item(item, values=values)
-
     def _delete_big(self):
         if self._cleaning or self._big_running:
             return
         disk = self.big_disk_filter.get() if getattr(self, "big_disk_filter", None) else "全部"
         visible = set(scanner.visible_large_paths(self.big_rows, self.big_type, disk))
-        self.big_checked &= visible
-        paths = [path for path in self.big_checked if not safepath.is_protected_path(path)]
+        paths = [path for path in self.big_checked if path in visible
+                 and not safepath.is_protected_path(path)]
         if not paths:
             messagebox.showinfo("提示", "请先勾选要清理的大文件。系统文件不会被勾选删除。")
             return
@@ -1177,32 +1409,44 @@ class App(_TkRoot):
         self._cleaning = True
         threading.Thread(target=self._recycle_worker, args=(paths, "大文件"), daemon=True).start()
 
-    def _recycle_worker(self, paths, title):
-        known = 0
-        for path in paths:
+    def _recycle_worker(self, paths, title, expected_groups=None):
+        known_sizes = {}
+        failed = set()
+        eligible = []
+        reasons = {"missing": [], "changed": [], "recycle": []}
+        total = len(paths)
+        for index, path in enumerate(paths, 1):
+            if not os.path.lexists(path):
+                failed.add(path)
+                reasons["missing"].append(path)
+                continue
+            if expected_groups is not None:
+                self.queue.put(("dup_verify", index, total, path))
+                group = expected_groups.get(path)
+                if group is None or not dupes.verify_duplicate_candidate(path, group):
+                    failed.add(path)
+                    reasons["changed"].append(path)
+                    continue
             try:
-                known += os.path.getsize(path)
+                known_sizes[path] = os.path.getsize(path)
             except OSError:
-                pass
-        failed = set(recyclebin.send_to_recycle(paths))
-        done = [path for path in paths if path not in failed and not os.path.exists(path)]
-        freed = 0
-        for path in done:
-            freed += 0
-        # 送进回收站后原路径已经不在，大小用删除前统计里仍存在的失败项扣掉。
-        failed_size = 0
-        for path in failed:
-            try:
-                failed_size += os.path.getsize(path)
-            except OSError:
-                pass
-        freed = max(known - failed_size, 0)
+                known_sizes[path] = 0
+            eligible.append(path)
+        try:
+            failed.update(recyclebin.send_to_recycle(eligible))
+        except Exception:
+            failed.update(eligible)
+        done = [path for path in eligible if path not in failed and not os.path.lexists(path)]
+        failed.update(path for path in eligible if os.path.lexists(path))
+        reasons["recycle"] = [path for path in eligible if path in failed]
+        freed = sum(known_sizes.get(path, 0) for path in done)
         self._write_clean_log([
             "开始清理", f"清理：{title}",
             f"清理结束，共释放 {utils.fmt_size(freed)}",
         ])
         self._cleaning = False
-        self.queue.put(("recycled", title, len(done), len(failed), freed))
+        self.queue.put(("recycled", title, len(done), len(failed), freed,
+                        list(done), sorted(failed), reasons))
 
     # ---------- 页面：大文件搬家 ----------
     def _page_bigmove(self, parent):
@@ -1249,17 +1493,19 @@ class App(_TkRoot):
 
         threading.Thread(target=work, args=(gen,), daemon=True).start()
 
-    def _render_bigmove(self):
+    def _render_bigmove(self, keep_checked=False):
         tree = getattr(self, "bigmove_tree", None)
         if not tree:
             return
         tree.delete(*tree.get_children())
-        self.bigmove_checked = set()
+        if not keep_checked:
+            self.bigmove_checked = set()
         total = 0
         for index, (path, size, mtime) in enumerate(self.bigmove_rows):
             total += size
             tree.insert("", "end", iid=str(index),
-                        values=(self._mark(False), path, utils.fmt_size(size), self._fmt_time(mtime)),
+                        values=(self._mark(path in self.bigmove_checked), path, utils.fmt_size(size),
+                                self._fmt_time(mtime)),
                         tags=("alt",) if index % 2 else ())
         if getattr(self, "bigmove_sub", None):
             self.bigmove_sub.configure(text=f"C 盘 {len(self.bigmove_rows)} 个大文件，共 {utils.fmt_size(total)}")
@@ -1323,31 +1569,82 @@ class App(_TkRoot):
         self.dup_sub = tk.Label(parent, text="每组自动保留一份。删除前预览，默认移到回收站。",
                                 bg=WHITE, fg=MUTED, font=("Microsoft YaHei UI", 9))
         self.dup_sub.pack(anchor="w", padx=18)
+        rules = tk.Frame(parent, bg=WHITE)
+        rules.pack(fill="x", padx=18, pady=(4, 0))
+        tk.Label(rules, text="每组保留：", bg=WHITE, fg=MUTED, font=look.tk_font(9)).pack(side="left")
+        self.dup_rule_labels = {}
+        for key, label in dupes.KEEP_RULES:
+            item = tk.Label(rules, text=label.replace("保留", ""), bg=WHITE, fg=TEXT, padx=8, pady=2,
+                            cursor="hand2", font=look.tk_font(9))
+            item.pack(side="left", padx=(0, 4))
+            item.bind("<Button-1>", lambda _e, k=key: self._set_dup_rule(k))
+            self.dup_rule_labels[key] = item
+        self._paint_dup_rules()
         self.dup_scope = tk.StringVar(value="全部磁盘")
         self._drive_tabs(parent, ["全部磁盘", "用户目录"] + utils.fixed_drives(),
                          self.dup_scope, self._rescan_dup)
-        tabs = tk.Frame(parent, bg=WHITE)
-        tabs.pack(fill="x", padx=18, pady=(8, 0))
+        self.dup_tabs = tk.Frame(parent, bg=WHITE)
+        self.dup_tabs.pack(fill="x", padx=18, pady=(10, 0))
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=18, pady=(6, 0))
         self.dup_tab_vars = {}
-        labels = {"video": "视频", "music": "音乐", "document": "文档", "image": "图片",
-                  "archive": "压缩包", "installer": "安装包", "other": "其他"}
         for key in DUP_KINDS:
             var = tk.BooleanVar(value=True)
             self._card_vars.append(var)
             self.dup_tab_vars[key] = var
-            look.Tick(tabs, var, command=lambda: self.after(1, self._render_dup),
-                      bg=PAGE, size=16).pack(side="left", padx=(8, 0))
-            tk.Label(tabs, text=labels[key], bg=PAGE, fg=TEXT, font=look.tk_font(9)).pack(side="left", padx=(2, 8))
-        clear = tk.Label(tabs, text="取消勾选", bg=BLUE_BG, fg="#1592e6", padx=10, pady=3,
-                         cursor="hand2", font=look.tk_font(9))
-        clear.pack(side="right")
-        clear.bind("<Button-1>", lambda _e: self._dup_clear())
         self.dup_table = look.FileTable(
             parent,
-            (("check", "", 36), ("name", "文件名称", 520), ("size", "文件大小", 110),
-             ("mtime", "修改时间", 150)),
-            on_toggle=self._toggle_dup_path, on_sort=self._sort_dup, bg=PAGE)
+            (("check", "", 90), ("name", "文件名称", 500), ("size", "文件大小", 110),
+             ("mtime", "修改时间", 140)),
+            on_toggle=self._toggle_dup_path, on_sort=self._sort_dup, bg=PAGE,
+            on_menu=self._file_menu, on_open=self._open_file)
+        clear = tk.Label(self.dup_table.head_slot, text="取消勾选", bg=BLUE_BG, fg="#1592e6",
+                         padx=8, pady=2, cursor="hand2", font=look.tk_font(9))
+        clear.pack(side="left")
+        clear.bind("<Button-1>", lambda _e: self._dup_clear())
+        self.dup_table.set_sort(self.dup_sort_key, self.dup_sort_desc)
         self.dup_tree = None
+
+    def _paint_dup_rules(self):
+        current = dupes.keep_rule()
+        for key, label in getattr(self, "dup_rule_labels", {}).items():
+            active = key == current
+            label.configure(bg=BLUE_BG if active else WHITE, fg="#1592e6" if active else TEXT)
+
+    def _set_dup_rule(self, rule):
+        dupes.set_keep_rule(rule)
+        self.dup_checked = dupes.auto_select(self.dup_groups)
+        self._paint_dup_rules()
+        self._render_dup()
+
+    def _render_dup_tabs(self):
+        tabs = getattr(self, "dup_tabs", None)
+        if tabs is None:
+            return
+        for child in tabs.winfo_children():
+            child.destroy()
+        labels = {"video": "视频", "music": "音乐", "document": "文档", "image": "图片",
+                  "archive": "压缩包", "installer": "安装包", "other": "其他"}
+        sizes = {key: 0 for key in DUP_KINDS}
+        for group in self.dup_groups:
+            kind = self._group_kind(group)
+            sizes[kind] = sizes.get(kind, 0) + group["size"] * max(len(group["files"]) - 1, 0)
+        all_on = all(var.get() for var in self.dup_tab_vars.values())
+        self._kind_tab(tabs, "全部", "", all_on, self._dup_toggle_all)
+        for key in DUP_KINDS:
+            var = self.dup_tab_vars[key]
+            self._kind_tab(tabs, labels[key], utils.fmt_size(sizes.get(key, 0)).replace(" ", ""),
+                           False, lambda v=var: self._dup_flip_kind(v),
+                           tick_var=var, on_tick=lambda: self.after(1, self._render_dup))
+
+    def _dup_toggle_all(self):
+        turn_on = not all(var.get() for var in self.dup_tab_vars.values())
+        for var in self.dup_tab_vars.values():
+            var.set(turn_on)
+        self._render_dup()
+
+    def _dup_flip_kind(self, var):
+        var.set(not var.get())
+        self._render_dup()
 
     def _dup_clear(self):
         self.dup_checked = set()
@@ -1408,20 +1705,26 @@ class App(_TkRoot):
         return filetypes.kind_of(files[0])
 
     def _toggle_dup_path(self, path, checked):
+        for group in self.dup_groups:
+            files = list(group.get("files") or [])
+            if path not in files or path != dupes.pick_keeper(group):
+                continue
+            # 勾选保留项 = 想删这份：把「保留」挪到同组另一份（优先挑没勾的），这一组仍至少留一份。
+            others = [one for one in files if one != path]
+            if checked and others:
+                spare = next((one for one in others if one not in self.dup_checked), others[0])
+                dupes.set_keeper(group, spare)
+                self.dup_checked.discard(spare)
+                self.dup_checked.add(path)
+            else:
+                self.dup_checked.discard(path)
+            self.after(1, self._render_dup)
+            return
         if checked:
             self.dup_checked.add(path)
         else:
             self.dup_checked.discard(path)
-        changed = False
-        for group in self.dup_groups:
-            files = list(group.get("files") or [])
-            if path in files and files and all(one in self.dup_checked for one in files):
-                self.dup_checked.discard(dupes.pick_keeper(group))
-                changed = True
-        if changed:
-            self.after(1, self._render_dup)
-        else:
-            self._refresh_dup_head()
+        self._refresh_dup_head()
 
     def _render_dup(self):
         table = getattr(self, "dup_table", None)
@@ -1436,15 +1739,15 @@ class App(_TkRoot):
             shown.append(group)
             visible_paths.update(group.get("files") or [])
         self.dup_checked &= visible_paths
-        if self.dup_sort_key == "mtime":
-            shown.sort(key=lambda group: max((group.get("mtimes") or {}).values() or [0]),
-                       reverse=self.dup_sort_desc)
-        else:
-            shown.sort(key=lambda group: group.get("size") or 0, reverse=self.dup_sort_desc)
+        keepers = {dupes.pick_keeper(group) for group in self.dup_groups}
+        self.dup_checked.difference_update(keepers)
+        shown = dupes.sort_duplicate_groups(shown, self.dup_sort_key, self.dup_sort_desc)
         rows = []
         for group_index, group in enumerate(shown):
             tint = "#e7f3ff" if group_index % 2 == 0 else "#fff6e8"
-            for path in group.get("files") or []:
+            files = group.get("files") or []
+            keeper = dupes.pick_keeper(group)
+            for position, path in enumerate(files):
                 mtime = (group.get("mtimes") or {}).get(path, 0)
                 rows.append({
                     "id": path,
@@ -1452,10 +1755,14 @@ class App(_TkRoot):
                     "icon": self._kind_icon(path),
                     "name": path,
                     "bg": tint,
+                    "group_end": position == len(files) - 1,
+                    "badge": "保留" if path == keeper else "",
                     "cells": [(utils.fmt_size(group.get("size") or 0), 110),
                               (self._fmt_time(mtime), 140)],
                 })
         table.set_rows(rows)
+        table.set_sort(self.dup_sort_key, self.dup_sort_desc)
+        self._render_dup_tabs()
         self._refresh_dup_head()
 
     def _refresh_dup_head(self):
@@ -1476,28 +1783,7 @@ class App(_TkRoot):
         GreenButton(self.dup_head, "一键清理", self._delete_dup).pack(side="right")
         if getattr(self, "dup_sub", None):
             self.dup_sub.configure(
-                text=f"已勾选 {len(doomed)} 个重复文件，共 {utils.fmt_size(selected_size)}。每组至少保留一份。")
-
-    def _on_dup_click(self, event):
-        item = self.dup_tree.identify_row(event.y)
-        column = self.dup_tree.identify_column(event.x)
-        if not item or column not in ("#1", "#0"):
-            return
-        path = self.dup_paths.get(item)
-        if not path:
-            return
-        if path in self.dup_checked:
-            self.dup_checked.discard(path)
-        else:
-            self.dup_checked.add(path)
-        for group in self.dup_groups:
-            files = list(group.get("files") or [])
-            if path in files and files and all(one in self.dup_checked for one in files):
-                keeper = dupes.pick_keeper(group)
-                self.dup_checked.discard(keeper)
-                if getattr(self, "dup_sub", None):
-                    self.dup_sub.configure(text="每组至少保留一个文件，已自动取消最后一份的勾选。")
-        self._render_dup()
+                text=f"已勾选 {len(doomed)} 个重复文件，共 {utils.fmt_size(selected_size)}。每组至少保留一份，勾选标「保留」的那份可改留同组另一份。")
 
     def _delete_dup(self):
         if self._cleaning or self._dup_running:
@@ -1511,8 +1797,13 @@ class App(_TkRoot):
         if not self._confirm_paths(paths, "确认清理重复文件",
                                    "每组都会保留至少一份。" + recyclebin.describe()):
             return
+        expected_groups = {
+            path: group for group in self.dup_groups
+            for path in group.get("files") or [] if path in paths
+        }
         self._cleaning = True
-        threading.Thread(target=self._recycle_worker, args=(paths, "重复文件"), daemon=True).start()
+        threading.Thread(target=self._recycle_worker,
+                         args=(paths, "重复文件", expected_groups), daemon=True).start()
 
     # ---------- 页面：微信 / QQ 专清 ----------
     def _page_wechat(self, parent):
@@ -1572,24 +1863,21 @@ class App(_TkRoot):
                 name = "微信" if key == "wechat" else "QQ"
                 sub.configure(text=f"已选择 {len(chosen)} 个{name}文件，合计 {utils.fmt_size(chosen_size)}")
         tabs = tk.Frame(body, bg=WHITE)
-        tabs.pack(fill="x", padx=16, pady=(8, 4))
+        tabs.pack(fill="x", padx=16, pady=(10, 0))
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(6, 8))
         current = self.im_tab.get(key) or self._im_tabs(key)[0][0]
         for kind, label in self._im_tabs(key):
             subset = [item for item in files if item["kind"] == kind]
             size = sum(item["size"] for item in subset)
-            all_on = bool(subset) and all(item["path"] in checked for item in subset)
-            piece = tk.Frame(tabs, bg=WHITE)
-            piece.pack(side="left", padx=(0, 8))
-            var = tk.BooleanVar(value=all_on)
-            self._card_vars.append(var)
-            tk.Checkbutton(piece, variable=var, bg=WHITE, activebackground=WHITE, bd=0,
-                           command=lambda k=key, kd=kind, v=var: self._toggle_im_kind(k, kd, v.get())).pack(side="left")
-            active = kind == current
-            name = tk.Label(piece, text=f"{label}({utils.fmt_size_compact(size)})",
-                            bg=BLUE if active else WHITE, fg="white" if active else TEXT,
-                            padx=8, pady=3, cursor="hand2", font=("Microsoft YaHei UI", 9))
-            name.pack(side="left")
-            name.bind("<Button-1>", lambda _e, k=key, kd=kind: self._set_im_tab(k, kd))
+            # 参考图里只有缓存、日志这类可整类清理的页签前带勾选框，媒体按月在分组里勾。
+            var = None
+            if kind in IM_BULK_KINDS:
+                var = tk.BooleanVar(value=bool(subset) and all(item["path"] in checked for item in subset))
+                self._card_vars.append(var)
+            self._kind_tab(tabs, label, utils.fmt_size(size).replace(" ", ""), kind == current,
+                           lambda k=key, kd=kind: self._set_im_tab(k, kd), tick_var=var,
+                           on_tick=(lambda k=key, kd=kind, v=var: self._toggle_im_kind(k, kd, v.get()))
+                           if var is not None else None)
         shown = [item for item in files if item["kind"] == current]
         if current == "file":
             self._render_received(body, key, shown)
@@ -1629,17 +1917,17 @@ class App(_TkRoot):
         for month in months:
             items = groups[month]
             label = items[0]["month_label"]
-            self._group_header(body, key, label, items)
-            if (key, month) not in self.im_open:
+            content = self._group_header(body, key, label, items, opened=(key, month) in self.im_open)
+            if content is None:
                 continue
-            limit = self.im_limits.get((key, month), 8)
+            limit = self.im_limits.get((key, month), 12)
             visible = items[:limit]
             if kind in ("image", "video", "sns"):
-                self._thumb_grid(body, key, visible)
+                self._thumb_grid(content, key, visible)
             else:
-                self._file_lines(body, key, visible)
+                self._file_lines(content, key, visible)
             if len(items) > limit:
-                more = tk.Label(body, text="点击查看更多", bg=WHITE, fg=BLUE, cursor="hand2",
+                more = tk.Label(content, text="点击查看更多", bg=CARD, fg=MUTED, cursor="hand2",
                                 font=("Microsoft YaHei UI", 9))
                 more.pack(pady=(2, 8))
                 more.bind("<Button-1>", lambda _e, k=key, m=month: self._im_more(k, m))
@@ -1647,32 +1935,52 @@ class App(_TkRoot):
     def _render_received(self, body, key, files):
         for sub, label in imclean.FILE_SUBS:
             items = [item for item in files if item.get("sub") == sub]
-            self._group_header(body, key, label, items, group_id=("file", sub))
-            if (key, "file", sub) not in self.im_open:
+            content = self._group_header(body, key, label, items, group_id=("file", sub),
+                                         opened=(key, "file", sub) in self.im_open)
+            if content is None:
                 continue
             limit = self.im_limits.get((key, "file", sub), 12)
-            self._file_lines(body, key, items[:limit])
+            self._file_lines(content, key, items[:limit])
             if len(items) > limit:
-                more = tk.Label(body, text="点击查看更多", bg=WHITE, fg=BLUE, cursor="hand2")
+                more = tk.Label(content, text="点击查看更多", bg=CARD, fg=MUTED, cursor="hand2")
                 more.pack()
                 more.bind("<Button-1>", lambda _e, k=key, s=sub: self._im_more(k, ("file", s)))
 
-    def _group_header(self, body, key, label, items, group_id=None):
+    def _group_header(self, body, key, label, items, group_id=None, opened=False):
+        """一组（某月或某类接收文件）是一张圆角卡：卡头勾选、标题、大小，展开后内容也在卡里。
+
+        展开时返回卡内的内容容器，收起时返回 None。
+        """
         size = sum(item["size"] for item in items)
         paths = [item["path"] for item in items]
         checked = self.im_checked_paths[key]
-        row = tk.Frame(body, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
-        row.pack(fill="x", padx=16, pady=4)
+        card = tk.Frame(body, bg=CARD, highlightbackground="#dfe7ef", highlightthickness=1)
+        card.pack(fill="x", padx=16, pady=(0, 10))
+        row = tk.Frame(card, bg=CARD, height=48)
+        row.pack(fill="x")
+        row.pack_propagate(False)
         var = tk.BooleanVar(value=bool(paths) and all(path in checked for path in paths))
         self._card_vars.append(var)
-        tk.Checkbutton(row, variable=var, bg=WHITE, activebackground=WHITE, bd=0,
-                       command=lambda p=paths, v=var: self._toggle_im_paths(key, p, v.get())).pack(side="left", padx=6)
-        title = tk.Label(row, text=label, bg=WHITE, fg=TEXT, cursor="hand2",
-                         font=("Microsoft YaHei UI", 10))
-        title.pack(side="left", padx=4, pady=8)
-        tk.Label(row, text=utils.fmt_size(size), bg=WHITE, fg=MUTED).pack(side="right", padx=12)
+        look.Tick(row, var, command=lambda p=paths, v=var: self._toggle_im_paths(key, p, v.get()),
+                  bg=CARD, size=16).pack(side="left", padx=(16, 10))
+        # 标题定宽，大小紧跟在标题后面（参考图大小在卡头中部，不是贴最右）。
+        title = tk.Label(row, text=label, bg=CARD, fg=TEXT, cursor="hand2", anchor="w",
+                         width=26, font=("Microsoft YaHei UI", 10))
+        title.pack(side="left")
+        tk.Label(row, text=utils.fmt_size(size), bg=CARD, fg=TEXT,
+                 font=("Microsoft YaHei UI", 10)).pack(side="left", padx=(8, 0))
+        arrow = tk.Label(row, text="收起" if opened else "展开", bg=CARD, fg=MUTED, cursor="hand2",
+                         font=look.tk_font(9))
+        arrow.pack(side="right", padx=14)
         token = group_id if group_id is not None else (items[0]["month"] if items else label)
-        title.bind("<Button-1>", lambda _e, k=key, token=token: self._toggle_open(k, token))
+        for widget in (title, arrow):
+            widget.bind("<Button-1>", lambda _e, k=key, token=token: self._toggle_open(k, token))
+        if not opened:
+            return None
+        tk.Frame(card, bg="#e8eef4", height=1).pack(fill="x")
+        content = tk.Frame(card, bg=CARD)
+        content.pack(fill="x", pady=(8, 4))
+        return content
 
     def _toggle_open(self, key, token):
         marker = (key, token) if not isinstance(token, tuple) else (key,) + tuple(token)
@@ -1695,51 +2003,57 @@ class App(_TkRoot):
     def _file_lines(self, body, key, items):
         checked = self.im_checked_paths[key]
         for item in items:
-            row = tk.Frame(body, bg=WHITE)
-            row.pack(fill="x", padx=28, pady=1)
+            row = tk.Frame(body, bg=CARD, height=32)
+            row.pack(fill="x", padx=(16, 12))
+            row.pack_propagate(False)
             var = tk.BooleanVar(value=item["path"] in checked)
             self._card_vars.append(var)
-            tk.Checkbutton(row, variable=var, bg=WHITE, bd=0,
-                           command=lambda p=item["path"], v=var: self._toggle_im_paths(key, [p], v.get())).pack(side="left")
-            tk.Label(row, text=item["name"], bg=WHITE, fg=TEXT, anchor="w").pack(side="left", padx=4)
-            tk.Label(row, text=self._fmt_time(item["mtime"]), bg=WHITE, fg=MUTED).pack(side="right", padx=8)
-            tk.Label(row, text=utils.fmt_size(item["size"]), bg=WHITE, fg=MUTED).pack(side="right")
+            look.Tick(row, var, command=lambda p=item["path"], v=var: self._toggle_im_paths(key, [p], v.get()),
+                      bg=CARD, size=14).pack(side="left", padx=(0, 6))
+            icon = self._kind_icon(item["path"])
+            if icon is not None:
+                tk.Label(row, image=icon, bg=CARD).pack(side="left", padx=(0, 6))
+            tk.Label(row, text=self._fmt_time(item["mtime"]), bg=CARD, fg=MUTED, width=16,
+                     anchor="w", font=look.tk_font(9)).pack(side="right")
+            tk.Label(row, text=utils.fmt_size(item["size"]), bg=CARD, fg=MUTED, width=10,
+                     anchor="w", font=look.tk_font(9)).pack(side="right", padx=(0, 8))
+            tk.Label(row, text=look.ellipsize_middle(item["name"], 420), bg=CARD, fg=TEXT,
+                     anchor="w", font=look.tk_font(9)).pack(side="left", fill="x", expand=True)
 
     def _thumb_grid(self, body, key, items):
-        wrap = tk.Frame(body, bg=WHITE)
-        wrap.pack(fill="x", padx=24, pady=4)
+        wrap = tk.Frame(body, bg=CARD)
+        wrap.pack(fill="x", padx=24, pady=(4, 4))
         checked = self.im_checked_paths[key]
-        for index, item in enumerate(items):
-            cell = tk.Frame(wrap, bg=WHITE, width=96, height=120)
-            cell.grid(row=index // 6, column=index % 6, padx=4, pady=4)
+        cells = []
+        for item in items:
+            cell = tk.Frame(wrap, bg=CARD, width=104, height=118)
             cell.pack_propagate(False)
+            cells.append(cell)
             var = tk.BooleanVar(value=item["path"] in checked)
             self._card_vars.append(var)
-            photo = self._load_thumb(item["path"])
-            if photo is not None:
-                holder = tk.Frame(cell, bg=CARD)
-                holder.pack()
-                tk.Label(holder, image=photo, bg=CARD).pack()
-                look.Tick(holder, var, command=lambda p=item["path"], v=var: self._toggle_im_paths(key, [p], v.get()),
-                          bg=CARD, size=14).place_over(holder)
-            else:
-                box = tk.Canvas(cell, width=72, height=54, bg="#d9e7f5", highlightthickness=0)
-                box.pack()
-                box.create_text(36, 27, text=utils.fmt_size_compact(item["size"]), fill=TEXT,
-                                font=("Microsoft YaHei UI", 8))
-                look.Tick(cell, var, command=lambda p=item["path"], v=var: self._toggle_im_paths(key, [p], v.get()),
-                          bg=WHITE, size=14).pack(anchor="w")
-            tk.Label(cell, text=item["name"][:12], bg=WHITE, fg=MUTED,
-                     font=("Microsoft YaHei UI", 7)).pack()
+            photo = self._load_thumb(item["path"], item.get("size"))
+            if photo is None:
+                photo = look.video_tile(item.get("size"), 90)
+                self._photos.append(photo)
+            holder = tk.Frame(cell, bg=CARD)
+            holder.pack(pady=(2, 0))
+            tk.Label(holder, image=photo, bg=CARD, bd=0).pack()
+            look.Tick(holder, var, command=lambda p=item["path"], v=var: self._toggle_im_paths(key, [p], v.get()),
+                      bg=CARD, size=14).place_over(holder)
+            tk.Label(cell, text=look.ellipsize_middle(item["name"], 92, size=8), bg=CARD, fg=TEXT,
+                     font=("Microsoft YaHei UI", 8)).pack(pady=(2, 0))
+        self._flow(wrap, cells, 112)
 
-    def _load_thumb(self, path):
+    def _load_thumb(self, path, weight=None):
         key = "thumb:" + path
         cached = self._icon_cache.get(key)
         if cached is not None:
             return cached or None
         photo = None
         try:
-            photo = look.thumb_for(path, 88)
+            photo = look.thumb_for(path, 90, weight)
+            if photo is None:
+                photo = look.shell_thumbnail(path, 90)
         except Exception:
             photo = None
         self._icon_cache[key] = photo or False
@@ -1804,12 +2118,15 @@ class App(_TkRoot):
                          "一键粉碎", self._shred_selected)
         tk.Label(parent, text="先加入列表，确认后再覆盖写入并删除。系统目录不能粉碎，粉碎后无法恢复。",
                  bg=WHITE, fg=MUTED, font=("Microsoft YaHei UI", 9)).pack(anchor="w", padx=18)
-        self.shred_tree = self._make_tree(parent, [
-            ("check", "", 36, "center"), ("name", "文件名称", 180, "w"),
-            ("path", "原路径", 360, "w"), ("mtime", "修改日期", 140, "center"),
-            ("action", "操作", 70, "center"),
-        ])
-        self.shred_tree.bind("<Button-1>", self._on_shred_click)
+        self.shred_all = tk.BooleanVar(value=True)
+        self.shred_table = look.FileTable(
+            parent,
+            (("check", "", 40), ("name", "文件名称", 200), ("path", "原路径", 300),
+             ("mtime", "修改日期", 130), ("action", "操作", 60)),
+            on_toggle=self._toggle_shred, bg=WHITE, sortable=(),
+            on_menu=self._file_menu, on_open=self._reveal_file)
+        look.Tick(self.shred_table.head_slot, self.shred_all, command=self._toggle_shred_all,
+                  bg=look.FileTable.HEAD_BG, size=16).pack(side="left", padx=(6, 0))
         self.shred_empty = tk.Frame(parent, bg=PAGE)
         self.shred_empty.place(relx=0.5, rely=0.48, anchor="center")
         art = tk.Canvas(self.shred_empty, width=160, height=120, bg=PAGE, highlightthickness=0)
@@ -1826,7 +2143,8 @@ class App(_TkRoot):
                                 font=("Microsoft YaHei UI", 9))
         history_link.pack(side="left")
         history_link.bind("<Button-1>", lambda _e: self._show_shred_history())
-        for text, cmd in (("添加文件", self._shred_pick_file), ("添加文件夹", self._shred_pick_folder)):
+        # 从右往左排，所以先放「添加文件夹」，界面上读起来是「添加文件」「添加文件夹」。
+        for text, cmd in (("添加文件夹", self._shred_pick_folder), ("添加文件", self._shred_pick_file)):
             lbl = tk.Label(btns, text=text, bg=BLUE, fg="white", padx=16, pady=6,
                            cursor="hand2", font=("Microsoft YaHei UI", 9, "bold"))
             lbl.pack(side="right", padx=(8, 0))
@@ -1837,35 +2155,52 @@ class App(_TkRoot):
             pass
 
     def _render_shred(self):
-        tree = getattr(self, "shred_tree", None)
-        if not tree:
+        table = getattr(self, "shred_table", None)
+        if not table:
             return
-        tree.delete(*tree.get_children())
-        for index, item in enumerate(self.shred_items):
-            mark = self._mark(item.get("checked", True))
-            tree.insert("", "end", iid=str(index), values=(
-                mark, os.path.basename(item["path"]), item["path"],
-                self._fmt_time(item.get("mtime")), "移除",
-            ), tags=("alt",) if index % 2 else ())
+        rows = []
+        for item in self.shred_items:
+            path = item["path"]
+            rows.append({
+                "id": path,
+                "checked": item.get("checked", True),
+                "icon": self._kind_icon(path),
+                "name": os.path.basename(path.rstrip("\\/")) or path,
+                "cells": [(look.ellipsize_middle(os.path.dirname(path), 290), 300),
+                          (self._fmt_time(item.get("mtime")), 130),
+                          ("移除", 60, lambda p=path: self._remove_shred(p))],
+            })
+        table.set_rows(rows)
+        self.shred_all.set(bool(self.shred_items) and all(item.get("checked", True) for item in self.shred_items))
         if getattr(self, "shred_empty", None):
             if self.shred_items:
                 self.shred_empty.place_forget()
             else:
-                self.shred_empty.place(relx=0.5, rely=0.48, anchor="center")
+                self.shred_empty.place(relx=0.5, rely=0.5, anchor="center")
+                self.shred_empty.lift()
 
-    def _on_shred_click(self, event):
-        item = self.shred_tree.identify_row(event.y)
-        column = self.shred_tree.identify_column(event.x)
-        if not item:
+    def _toggle_shred(self, path, checked):
+        if not isinstance(path, (str, os.PathLike)):
             return
-        index = int(item)
-        if column == "#5":
-            del self.shred_items[index]
-            self._render_shred()
+        path = os.fspath(path)
+        for item in self.shred_items:
+            if item.get("path") == path:
+                item["checked"] = checked
+                break
+        self.shred_all.set(bool(self.shred_items) and all(item.get("checked", True) for item in self.shred_items))
+
+    def _toggle_shred_all(self):
+        value = bool(self.shred_all.get())
+        for item in self.shred_items:
+            item["checked"] = value
+        self._render_shred()
+
+    def _remove_shred(self, path):
+        if not isinstance(path, (str, os.PathLike)):
             return
-        if column in ("#1", "#0"):
-            self.shred_items[index]["checked"] = not self.shred_items[index].get("checked", True)
-            self._render_shred()
+        path = os.fspath(path)
+        self.shred_items = [item for item in self.shred_items if item.get("path") != path]
+        self.after(1, self._render_shred)
 
     def _shred_add_paths(self, paths):
         added = False
@@ -1907,7 +2242,20 @@ class App(_TkRoot):
         if blocked:
             messagebox.showerror("无法粉碎", "列表中含有系统路径，已拒绝：\n" + "\n".join(blocked[:8]))
             return
-        if not self._confirm_paths(paths, "确认粉碎", "将覆盖写入后永久删除，不能从回收站恢复。"):
+        note = "将覆盖写入后永久删除，不能从回收站恢复。"
+        media_types = {}
+        for path in paths:
+            drive = self._disk_of(path)
+            if not drive:
+                continue
+            drive = drive.upper()
+            if drive not in media_types:
+                try:
+                    media_types[drive] = utils.is_ssd(drive)
+                except Exception:
+                    media_types[drive] = None
+        note += _shred_media_warning(media_types)
+        if not self._confirm_paths(paths, "确认粉碎", note):
             return
         self._cleaning = True
         threading.Thread(target=self._shred_worker, args=(paths,), daemon=True).start()
@@ -1918,10 +2266,20 @@ class App(_TkRoot):
             history.append_shred_history(LOG_DIR, records)
         except OSError:
             pass
-        done = [item["path"] for item in records if item.get("status") == "ok"]
-        failed = [item for item in records if item.get("status") != "ok"]
+        done = [item["path"] for item in records
+                if item.get("finished") or (item.get("status") == "ok" and "finished" not in item)]
+        count = sum(int(item.get("files_ok", 1 if item.get("status") == "ok" else 0) or 0)
+                    for item in records)
+        failed = []
+        for item in records:
+            details = item.get("failures") or []
+            if details:
+                failed.extend(details)
+            elif item.get("status") != "ok":
+                failed.append({"path": item.get("path", ""),
+                               "error": item.get("error") or "未能完成粉碎"})
         self._cleaning = False
-        self.queue.put(("shred_done", done, failed))
+        self.queue.put(("shred_done", done, count, failed))
 
     def _show_shred_history(self):
         rows = history.load_shred_history(LOG_DIR)
@@ -2021,26 +2379,40 @@ class App(_TkRoot):
         lines = ["开始清理"]
         freed = 0
         errors = []
+        skipped = pending = pending_size = 0
         for cat in chosen:
             try:
                 result = cleaner.clean_category(cat, log=lines.append)
                 freed += result.freed
                 errors.extend(result.errors)
-                lines.append(f"清理：{cat.name}")
+                skipped += result.skipped
+                pending += result.pending
+                pending_size += result.pending_size
+                if result.errors or result.skipped or result.pending:
+                    lines.append(f"未全部完成：{cat.name}")
+                else:
+                    lines.append(f"清理：{cat.name}")
             except Exception as exc:
                 errors.append(f"{cat.name}：{exc}")
                 lines.append(f"清理失败：{cat.name} {exc}")
+        if skipped:
+            lines.append(f"安全跳过 {skipped} 项")
+        if pending:
+            lines.append(f"待重启后删除 {pending} 项（{utils.fmt_size(pending_size)}）")
         lines.append(f"清理结束，共释放 {utils.fmt_size(freed)}")
         self._write_clean_log(lines)
         self._cleaning = False
-        self.queue.put(("clean_done", freed, errors))
+        self.queue.put(("clean_done", freed, errors, skipped, pending, pending_size))
 
     def _run_defrag(self):
         if self._cleaning:
             return
         drive = self.frag_drive.get()
-        if not messagebox.askyesno("确认", f"将对 {drive} 执行碎片整理/优化，可能需要较长时间。",
-                                   icon="warning"):
+        if getattr(self, "frag_ssd", None):
+            text = f"{drive} 是固态硬盘。将让系统执行 TRIM 优化，不会做碎片整理（对固态盘没有好处）。"
+        else:
+            text = f"将对 {drive} 执行碎片整理，可能需要较长时间。"
+        if not messagebox.askyesno("确认", text, icon="warning"):
             return
         self._cleaning = True
         threading.Thread(target=self._defrag_worker, args=(drive,), daemon=True).start()
@@ -2281,11 +2653,20 @@ class App(_TkRoot):
             self._draw_disk_bar()
             freed = message[1]
             errors = message[2] if len(message) > 2 else []
-            if errors:
+            skipped = int(message[3] or 0) if len(message) > 3 else 0
+            pending = int(message[4] or 0) if len(message) > 4 else 0
+            pending_size = int(message[5] or 0) if len(message) > 5 else 0
+            if errors or skipped or pending:
+                details = list(errors)
+                if skipped:
+                    details.append(f"安全策略跳过 {skipped} 项（未删除）")
+                if pending:
+                    details.append(
+                        f"待重启后删除 {pending} 项，约 {utils.fmt_size(pending_size)}（当前未计入释放空间）")
                 self._show_warning_panel(
                     "清理未全部完成",
-                    f"已释放 {utils.fmt_size(freed)}。以下项目未能安全删除：",
-                    "", errors, [])
+                    f"实际释放 {utils.fmt_size(freed)}。请查看未完成项：",
+                    "", details, [])
             else:
                 messagebox.showinfo("清理完成", f"本次释放 {utils.fmt_size(freed)}")
             self.start_scan()
@@ -2298,8 +2679,14 @@ class App(_TkRoot):
             self._big_running = False
             self.worker = None
             self.big_rows = message[2]
+            self.big_checked.intersection_update(path for path, _size, _mtime in self.big_rows)
             self._render_big()
             self._update_sidebar_sizes()
+        elif kind == "dup_verify":
+            _, index, total, path = message
+            if getattr(self, "dup_sub", None):
+                self.dup_sub.configure(
+                    text=f"删除前逐个核对文件内容 {index}/{total}：{os.path.basename(path)}（大文件需要一会儿）")
         elif kind == "dup_progress":
             if self.jobs.accept("dup", message[1]):
                 self.dup_sub.configure(text=f"正在查找重复文件… 已发现 {message[2]} 组")
@@ -2314,22 +2701,46 @@ class App(_TkRoot):
             self._update_sidebar_sizes()
         elif kind == "defrag_done":
             self.worker = None
-            self._update_frag_stats()
-            messagebox.showinfo("完成", "磁盘优化已结束。")
+            ok = bool(message[1])
+            try:
+                self._update_frag_stats()
+            except Exception:
+                pass
+            if ok:
+                messagebox.showinfo("完成", "磁盘优化已结束。")
+            else:
+                if getattr(self, "frag_status", None):
+                    self.frag_status.configure(text="磁盘优化失败，系统未完成优化。")
+                messagebox.showerror("磁盘优化失败", "系统未完成磁盘优化，请检查权限或系统工具状态。")
         elif kind == "shred_done":
             self.worker = None
-            done = message[1]
-            paths = done if isinstance(done, (list, tuple)) else []
-            count = len(paths) if isinstance(done, (list, tuple)) else int(done or 0)
+            paths = message[1] if isinstance(message[1], (list, tuple)) else []
+            count = int(message[2] or 0) if len(message) > 2 else len(paths)
+            failures = message[3] if len(message) > 3 else []
             finished = set(paths)
             self.shred_items = [item for item in self.shred_items if item["path"] not in finished]
             self._render_shred()
-            messagebox.showinfo("完成", f"已粉碎 {count} 个文件。")
+            if failures:
+                details = [f"{item.get('path', '')}：{item.get('error', '粉碎失败')}"
+                           if isinstance(item, dict) else str(item) for item in failures]
+                self._show_warning_panel(
+                    "粉碎未全部完成", f"成功粉碎 {count} 个文件；失败 {len(failures)} 项。",
+                    "", details, [])
+            else:
+                messagebox.showinfo("完成", f"已粉碎 {count} 个文件。")
         elif kind == "recycled":
             _title, done, failed, freed = message[1], message[2], message[3], message[4]
-            self.big_checked.clear()
-            self.dup_checked.clear()
-            messagebox.showinfo("完成", f"{_title}：已移入回收站 {done} 个，失败 {failed} 个，约 {utils.fmt_size(freed)}。")
+            done_paths = set(message[5] if len(message) > 5 else [])
+            self.big_checked.difference_update(done_paths)
+            self.dup_checked.difference_update(done_paths)
+            reasons = message[7] if len(message) > 7 else {}
+            summary = f"{_title}：已移入回收站 {done} 个，约 {utils.fmt_size(freed)}。"
+            if failed:
+                details = _recycle_failure_lines(reasons, message[6] if len(message) > 6 else [])
+                self._show_warning_panel(f"{_title}未全部完成", summary + f"未删除 {failed} 个：",
+                                         "", details, [])
+            else:
+                messagebox.showinfo("完成", summary)
             if self.current_page == "big":
                 self.start_big_scan()
             elif self.current_page == "dup":
@@ -2357,18 +2768,23 @@ class App(_TkRoot):
             self._render_privacy()
         elif kind == "privacy_scan_done":
             self.privacy_records = message[1]
+            self.privacy_scan_error = message[2] if len(message) > 2 else ""
             self.privacy_mode = "result"
             self.privacy_selected = {
-                item["id"] for item in self.privacy_records if int(item.get("count") or 0) > 0
+                item["id"] for item in self.privacy_records
+                if item.get("count_available", True) and int(item.get("count") or 0) > 0
             }
             self._render_privacy()
             self._update_sidebar_sizes()
         elif kind == "privacy_cleaned":
             result = message[1]
-            messagebox.showinfo(
-                "清理完成",
-                f"移走 {result.get('files', 0)} 个文件，处理 {result.get('sql', 0)} 个数据库，"
-                f"清除 {result.get('registry', 0)} 条记录。")
+            summary = (f"移走 {result.get('files', 0)} 个文件，处理 {result.get('sql', 0)} 个数据库，"
+                       f"清除 {result.get('registry', 0)} 条记录。")
+            failures = result.get("failed") or []
+            if failures:
+                self._show_warning_panel("隐私清理未全部完成", summary, "", failures, [])
+            else:
+                messagebox.showinfo("清理完成", summary)
             self.privacy_records = []
             self.privacy_selected = set()
             self._start_privacy_scan()
@@ -2420,7 +2836,8 @@ class App(_TkRoot):
             self._refresh_im(key)
             self._update_sidebar_sizes()
         elif kind == "frag_stats":
-            _, report, drive = message
+            report, drive = message[1], message[2]
+            self.frag_ssd = message[3] if len(message) > 3 else None
             self.frag_analysis = report or {}
             self._frag_running = False
             count = self.frag_analysis.get("count")
@@ -2429,7 +2846,10 @@ class App(_TkRoot):
             self.frag_values["count"].configure(text=str(count) if count is not None else "—")
             self.frag_values["space"].configure(text=f"{space} GB" if space is not None else "—")
             self.frag_values["rate"].configure(text=f"{percent:g}%" if percent is not None else "—")
-            if percent is None and count is None:
+            if self.frag_ssd:
+                self.frag_status.configure(
+                    text=f"状态：{str(drive).rstrip(chr(92))} 是固态硬盘，不需要整理碎片。「一键清理」只会让系统做 TRIM 优化")
+            elif percent is None and count is None:
                 self.frag_status.configure(text="状态：没能读到碎片分析。下方格子是示意，不是磁盘簇的真实布局")
             else:
                 self.frag_status.configure(
@@ -2550,12 +2970,9 @@ class App(_TkRoot):
             self._draw_frag_grid(self.frag_canvas)
         self.privacy_records = [
             {"id": "risk_file", "section": "high", "name": "文件敏感隐私", "count": 16, "files": [], "action": "files"},
-            {"id": "risk_other", "section": "high", "name": "其他敏感隐私", "count": 1, "files": [], "action": "files"},
             {"id": "risk_money", "section": "high", "name": "财产安全隐私", "count": 0, "files": [], "action": "files"},
             {"id": "risk_shop", "section": "high", "name": "网络购物痕迹", "count": 0, "files": [], "action": "files"},
             {"id": "risk_medical", "section": "high", "name": "医疗信息隐私", "count": 0, "files": [], "action": "files"},
-            {"id": "risk_adult", "section": "high", "name": "成人敏感隐私", "count": 0, "files": [], "action": "files"},
-            {"id": "risk_leak", "section": "high", "name": "泄露账号密码", "count": 0, "files": [], "action": "files"},
             {"id": "hist_chrome", "section": "history", "name": "Chrome", "count": 2062, "files": [], "action": "files"},
             {"id": "hist_edge", "section": "history", "name": "Edge", "count": 89, "files": [], "action": "files"},
             {"id": "hist_qqbrowser", "section": "history", "name": "QQ浏览器", "count": 24, "files": [], "action": "files"},

@@ -37,11 +37,17 @@ def append_shred_history(log_dir, paths):
     with open(path, "a", encoding="utf-8") as handle:
         for item in paths or []:
             if isinstance(item, str):
-                status, target = "ok", item
+                rows = [("ok", item)]
             else:
-                status = item.get("status") or "ok"
-                target = item.get("path") or ""
-            handle.write(f"{moment}\t{status}\t{target}\n")
+                rows = [("ok", path) for path in item.get("success_paths") or []]
+                rows.extend((entry.get("status") or "failed", entry.get("path") or "")
+                            for entry in item.get("failures") or [])
+                if not rows and item.get("finished"):
+                    rows.append((item.get("status") or "ok", item.get("path") or ""))
+                if not rows and not item.get("failures"):
+                    rows.append((item.get("status") or "ok", item.get("path") or ""))
+            for status, target in rows:
+                handle.write(f"{moment}\t{status}\t{target}\n")
         handle.flush()
         os.fsync(handle.fileno())
     return path

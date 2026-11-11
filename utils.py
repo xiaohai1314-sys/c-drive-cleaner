@@ -217,3 +217,45 @@ def remove_empty_dirs(root: str) -> int:
         except OSError:
             pass
     return removed
+
+
+def is_ssd(drive) -> bool | None:
+    """判断盘符所在磁盘是不是固态盘（没有寻道开销）。判断不了返回 None。
+
+    用 IOCTL_STORAGE_QUERY_PROPERTY 查 StorageDeviceSeekPenaltyProperty，普通用户权限即可。
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return None
+    letter = str(drive or "")[:1].upper()
+    if not letter.isalpha():
+        return None
+
+    class Query(ctypes.Structure):
+        _fields_ = [("PropertyId", wintypes.DWORD), ("QueryType", wintypes.DWORD),
+                    ("Additional", ctypes.c_ubyte * 1)]
+
+    class SeekPenalty(ctypes.Structure):
+        _fields_ = [("Version", wintypes.DWORD), ("Size", wintypes.DWORD),
+                    ("IncursSeekPenalty", wintypes.BOOLEAN)]
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    handle = kernel32.CreateFileW(f"\\\\.\\{letter}:", 0, 0x00000003, None, 3, 0, None)
+    if not handle or handle == wintypes.HANDLE(-1).value:
+        return None
+    try:
+        query = Query(7, 0)
+        out = SeekPenalty()
+        returned = wintypes.DWORD(0)
+        ok = kernel32.DeviceIoControl(handle, 0x002D1400, ctypes.byref(query), ctypes.sizeof(query),
+                                      ctypes.byref(out), ctypes.sizeof(out), ctypes.byref(returned), None)
+        if not ok:
+            return None
+        return not bool(out.IncursSeekPenalty)
+    finally:
+        kernel32.CloseHandle(handle)

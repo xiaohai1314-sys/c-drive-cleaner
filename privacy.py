@@ -143,7 +143,7 @@ def _count(conn, sql, params=()):
     try:
         row = conn.execute(sql, params).fetchone()
     except sqlite3.Error:
-        return 0
+        return None
     if not row or row[0] is None:
         return 0
     return int(row[0])
@@ -162,17 +162,23 @@ def _shop_where(column="url"):
 
 
 def history_stats(path: str) -> dict:
-    """读取一份浏览器历史库的条数。打不开时各项为 0。"""
-    stats = {"urls": 0, "downloads": 0, "shop": 0, "money": 0, "medical": 0}
+    """读取浏览器历史库；打不开或缺少相应表时以状态标记，不伪装成 0。"""
+    stats = {
+        "urls": 0, "downloads": 0, "shop": 0, "money": 0, "medical": 0,
+        "urls_available": False, "downloads_available": False,
+        "shop_available": False, "money_available": False,
+        "medical_available": False,
+    }
     conn, tmp = _connect_copy(path)
     if conn is None:
         return stats
     try:
         stats["urls"] = _count(conn, "SELECT COUNT(*) FROM urls")
-        if stats["urls"] == 0:
+        if stats["urls"] is None:
             stats["urls"] = _count(conn, "SELECT COUNT(*) FROM moz_places")
+        stats["urls_available"] = stats["urls"] is not None
         stats["downloads"] = _count(conn, "SELECT COUNT(*) FROM downloads")
-        if stats["downloads"] == 0:
+        if stats["downloads"] is None:
             stats["downloads"] = _count(
                 conn,
                 "SELECT COUNT(*) FROM moz_annos a "
@@ -181,28 +187,42 @@ def history_stats(path: str) -> dict:
             )
         clause, params = _shop_where("url")
         stats["shop"] = _count(conn, f"SELECT COUNT(*) FROM urls WHERE {clause}", params)
-        if stats["shop"] == 0:
+        if stats["shop"] is None:
             clause, params = _shop_where("url")
             stats["shop"] = _count(conn, f"SELECT COUNT(*) FROM moz_places WHERE {clause}", params)
+        stats["shop_available"] = stats["shop"] is not None
         stats["money"] = _count_domains(conn, "urls", FINANCE_DOMAINS)
-        if stats["money"] == 0:
+        if stats["money"] is None:
             stats["money"] = _count_domains(conn, "moz_places", FINANCE_DOMAINS)
+        stats["money_available"] = stats["money"] is not None
         stats["medical"] = _count_domains(conn, "urls", MEDICAL_DOMAINS)
-        if stats["medical"] == 0:
+        if stats["medical"] is None:
             stats["medical"] = _count_domains(conn, "moz_places", MEDICAL_DOMAINS)
+        stats["medical_available"] = stats["medical"] is not None
+        stats["downloads_available"] = stats["downloads"] is not None
     finally:
         _close_copy(conn, tmp)
+    for key in ("urls", "downloads", "shop", "money", "medical"):
+        if stats[key] is None:
+            stats[key] = 0
     return stats
 
 
-def cookie_count(path: str) -> int:
+def cookie_stats(path: str) -> dict:
     conn, tmp = _connect_copy(path)
     if conn is None:
-        return 0
+        return {"count": 0, "available": False}
     try:
-        return _count(conn, "SELECT COUNT(*) FROM cookies") or _count(conn, "SELECT COUNT(*) FROM moz_cookies")
+        count = _count(conn, "SELECT COUNT(*) FROM cookies")
+        if count is None:
+            count = _count(conn, "SELECT COUNT(*) FROM moz_cookies")
+        return {"count": count or 0, "available": count is not None}
     finally:
         _close_copy(conn, tmp)
+
+
+def cookie_count(path: str) -> int:
+    return cookie_stats(path)["count"]
 
 
 def apply_sql(path: str, statements) -> bool:
@@ -252,8 +272,12 @@ def _download_sql(path: str):
 
 
 def _shop_sql():
-    # 域名来自固定列表，不拼接用户输入。
-    likes = " OR ".join([f"url LIKE '%{domain}%'" for domain in SHOP_DOMAINS])
+    return _domain_sql(SHOP_DOMAINS)
+
+
+def _domain_sql(domains):
+    """按域名删掉浏览历史里的访问记录。域名来自固定列表，不拼接用户输入。"""
+    likes = " OR ".join([f"url LIKE '%{domain}%'" for domain in domains])
     return [
         f"DELETE FROM visits WHERE url IN (SELECT id FROM urls WHERE {likes})",
         f"DELETE FROM urls WHERE {likes}",
@@ -265,6 +289,8 @@ def _scan_chromium(spec):
     files = []
     history_files = []
     urls = downloads = shop = cookies = money = medical = 0
+    history_available = downloads_available = shop_available = False
+    money_available = medical_available = cookies_available = False
     for profile in _profiles(spec.get("root", "")):
         picked = collect_chromium_files(profile)
         files.extend(picked)
@@ -277,12 +303,25 @@ def _scan_chromium(spec):
             shop += stats["shop"]
             money += stats.get("money") or 0
             medical += stats.get("medical") or 0
+            history_available |= stats.get("urls_available", False)
+            downloads_available |= stats.get("downloads_available", False)
+            shop_available |= stats.get("shop_available", False)
+            money_available |= stats.get("money_available", False)
+            medical_available |= stats.get("medical_available", False)
         for cookie in (os.path.join(profile, "Cookies"),
                        os.path.join(profile, "Network", "Cookies")):
             if os.path.isfile(cookie):
-                cookies += cookie_count(cookie)
+                cookie_result = cookie_stats(cookie)
+                cookies += cookie_result["count"]
+                cookies_available |= cookie_result["available"]
     return {
         "id": f"hist_{spec['id']}",
+        "count_available": history_available,
+        "downloads_available": downloads_available,
+        "shop_available": shop_available,
+        "money_available": money_available,
+        "medical_available": medical_available,
+        "cookies_available": cookies_available,
         "section": "history",
         "name": spec["name"],
         "browser": spec["id"],
@@ -302,6 +341,8 @@ def _scan_firefox(spec):
     files = []
     history_files = []
     urls = downloads = shop = cookies = money = medical = 0
+    history_available = downloads_available = shop_available = False
+    money_available = medical_available = cookies_available = False
     for profile in _firefox_profiles(spec.get("root", "")):
         places = os.path.join(profile, "places.sqlite")
         cookies_db = os.path.join(profile, "cookies.sqlite")
@@ -314,11 +355,24 @@ def _scan_firefox(spec):
             shop += stats["shop"]
             money += stats.get("money") or 0
             medical += stats.get("medical") or 0
+            history_available |= stats.get("urls_available", False)
+            downloads_available |= stats.get("downloads_available", False)
+            shop_available |= stats.get("shop_available", False)
+            money_available |= stats.get("money_available", False)
+            medical_available |= stats.get("medical_available", False)
         if os.path.isfile(cookies_db) and not safepath.is_password_store(cookies_db):
             files.append(cookies_db)
-            cookies += cookie_count(cookies_db)
+            cookie_result = cookie_stats(cookies_db)
+            cookies += cookie_result["count"]
+            cookies_available |= cookie_result["available"]
     return {
         "id": "hist_firefox",
+        "count_available": history_available,
+        "downloads_available": downloads_available,
+        "shop_available": shop_available,
+        "money_available": money_available,
+        "medical_available": medical_available,
+        "cookies_available": cookies_available,
         "section": "history",
         "name": spec["name"],
         "browser": "firefox",
@@ -336,10 +390,12 @@ def _scan_firefox(spec):
 
 def _scan_ie():
     count = 0
+    available = False
     try:
         import winreg
         path = r"Software\Microsoft\Internet Explorer\TypedURLs"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+            available = True
             index = 0
             while True:
                 try:
@@ -356,6 +412,7 @@ def _scan_ie():
         "name": "IE",
         "browser": "ie",
         "count": count,
+        "count_available": available,
         "files": [],
         "history_files": [],
         "downloads": 0,
@@ -379,7 +436,8 @@ def _scan_high(cookie_records):
                 cookie_files.append(path)
     recent = _recent_dir()
     recent_files = []
-    if os.path.isdir(recent):
+    recent_available = os.path.isdir(recent)
+    if recent_available:
         try:
             for name in os.listdir(recent):
                 path = os.path.join(recent, name)
@@ -387,29 +445,35 @@ def _scan_high(cookie_records):
                     recent_files.append(path)
         except OSError:
             recent_files = []
+            recent_available = False
     sensitive = [path for path in recent_files
                  if any(word in os.path.basename(path) for word in SENSITIVE_NAME_WORDS)]
     money = sum(int(item.get("money") or 0) for item in cookie_records)
     shop = sum(int(item.get("shop") or 0) for item in cookie_records)
     medical = sum(int(item.get("medical") or 0) for item in cookie_records)
-    # 成人内容和密码库不做内容扫描，卡片固定为 0，避免编造条数。
+    history_records = [item for item in cookie_records
+                       if item.get("browser") in {"chrome", "edge", "qqbrowser", "quark", "firefox"}]
+    money_available = any(item.get("money_available", False) for item in history_records)
+    shop_available = any(item.get("shop_available", False) for item in history_records)
+    medical_available = any(item.get("medical_available", False) for item in history_records)
+    cookies_available = any(item.get("cookies_available", False) for item in history_records)
+    # 成人内容、密码泄露、其他敏感信息没有可靠的检测手段，不出卡片，免得显示假的 0 条。
     return [
         {"id": "risk_file", "section": "high", "name": "文件敏感隐私",
-         "count": len(sensitive), "files": sensitive, "action": "files"},
-        {"id": "risk_other", "section": "high", "name": "其他敏感隐私",
-         "count": 0, "files": [], "action": "files"},
+         "count": len(sensitive), "count_available": recent_available,
+         "files": sensitive, "action": "files"},
         {"id": "risk_money", "section": "high", "name": "财产安全隐私",
-         "count": money, "files": [], "action": "files"},
+         "count": money, "count_available": money_available,
+         "files": [], "action": "files"},
         {"id": "risk_shop", "section": "high", "name": "网络购物痕迹",
-         "count": shop, "files": [], "action": "files"},
+         "count": shop, "count_available": shop_available,
+         "files": [], "action": "files"},
         {"id": "risk_medical", "section": "high", "name": "医疗信息隐私",
-         "count": medical, "files": [], "action": "files"},
-        {"id": "risk_adult", "section": "high", "name": "成人敏感隐私",
-         "count": 0, "files": [], "action": "files"},
-        {"id": "risk_leak", "section": "high", "name": "泄露账号密码",
-         "count": 0, "files": [], "action": "files"},
+         "count": medical, "count_available": medical_available,
+         "files": [], "action": "files"},
         {"id": "cookies", "section": "high", "name": "Cookie",
-         "count": cookies, "files": cookie_files, "action": "files"},
+         "count": cookies, "count_available": cookies_available,
+         "files": cookie_files, "action": "files"},
     ]
 
 
@@ -417,11 +481,13 @@ def _scan_computer():
     import registry
     rows = []
     for key, name in registry.GROUPS:
+        count, available = registry.group_count_status(key)
         rows.append({
             "id": key,
             "section": "computer",
             "name": name,
-            "count": registry.group_count(key),
+            "count": count,
+            "count_available": available,
             "files": [],
             "action": "registry",
             "group": key,
@@ -431,10 +497,12 @@ def _scan_computer():
 
 def _scan_software():
     count = 0
+    available = False
     try:
         import winreg
         base = r"Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, base) as root:
+            available = True
             index = 0
             while True:
                 try:
@@ -459,7 +527,9 @@ def _scan_software():
     prefetch = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "Prefetch")
     if os.path.isdir(prefetch):
         try:
-            count += sum(1 for name in os.listdir(prefetch) if name.lower().endswith(".pf"))
+            names = os.listdir(prefetch)
+            available = True
+            count += sum(1 for name in names if name.lower().endswith(".pf"))
         except OSError:
             pass
     return {
@@ -467,6 +537,7 @@ def _scan_software():
         "section": "software",
         "name": "软件使用痕迹",
         "count": count,
+        "count_available": available,
         "files": [],
         "action": "userassist",
     }
@@ -475,10 +546,12 @@ def _scan_software():
 def _scan_media():
     count = 0
     files = []
+    available = False
     try:
         import winreg
         path = r"Software\Microsoft\MediaPlayer\Player\RecentFileList"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+            available = True
             index = 0
             while True:
                 try:
@@ -493,6 +566,7 @@ def _scan_media():
     if os.path.isdir(recent):
         try:
             names = os.listdir(recent)
+            available = True
         except OSError:
             names = []
         for name in names:
@@ -508,6 +582,7 @@ def _scan_media():
         try:
             with open(vlc, encoding="utf-8", errors="ignore") as handle:
                 count += sum(1 for line in handle if "file:///" in line.lower())
+                available = True
         except OSError:
             pass
     return {
@@ -515,6 +590,7 @@ def _scan_media():
         "section": "media",
         "name": "影音播放痕迹",
         "count": count,
+        "count_available": available,
         "files": files,
         "action": "media",
     }
@@ -545,6 +621,8 @@ def scan(progress=None):
     records.extend(browsers)
     downloads = sum(int(item.get("downloads") or 0) for item in browsers)
     shop = sum(int(item.get("shop") or 0) for item in browsers)
+    downloads_available = any(item.get("downloads_available", False) for item in browsers)
+    shop_available = any(item.get("shop_available", False) for item in browsers)
     sql_downloads = []
     sql_shop = []
     for item in browsers:
@@ -558,17 +636,28 @@ def scan(progress=None):
     push("下载历史记录")
     records.append({
         "id": "download", "section": "download", "name": "下载历史记录",
-        "count": downloads, "files": [], "sql_jobs": sql_downloads, "action": "sql",
+        "count": downloads, "count_available": downloads_available,
+        "files": [], "sql_jobs": sql_downloads, "action": "sql",
     })
     push("网络购物记录")
     records.append({
         "id": "shop", "section": "shop", "name": "网络购物记录",
-        "count": shop, "files": [], "sql_jobs": sql_shop, "action": "sql",
+        "count": shop, "count_available": shop_available,
+        "files": [], "sql_jobs": sql_shop, "action": "sql",
     })
+    domain_jobs = {"risk_shop": SHOP_DOMAINS, "risk_money": FINANCE_DOMAINS,
+                   "risk_medical": MEDICAL_DOMAINS}
     for record in records:
-        if record.get("id") == "risk_shop":
-            record["action"] = "sql"
-            record["sql_jobs"] = list(sql_shop)
+        domains = domain_jobs.get(record.get("id"))
+        if domains is None:
+            continue
+        jobs = []
+        for item in browsers:
+            for path in item.get("history_files") or []:
+                jobs.append({"browser": item["browser"], "path": path,
+                             "statements": _domain_sql(domains)})
+        record["action"] = "sql"
+        record["sql_jobs"] = jobs
     push("电脑使用痕迹")
     records.extend(_scan_computer())
     push("软件使用痕迹")
@@ -585,11 +674,13 @@ def is_selectable(record) -> bool:
         return False
     action = record.get("action")
     if action == "sql":
-        return bool(record.get("sql_jobs"))
+        return bool(record.get("sql_jobs")) and record.get("count_available", True)
     if action == "registry":
-        return True
+        return (record.get("count_available", True)
+                and int(record.get("count") or 0) > 0)
     if action in ("userassist", "ie", "media", "wmp"):
-        return True
+        return (record.get("count_available", True)
+                and (int(record.get("count") or 0) > 0 or bool(record.get("files"))))
     if action == "files":
         return bool(record.get("files"))
     return False
@@ -695,23 +786,53 @@ def apply_plan(plan, remover=None) -> dict:
 
     files = list(plan.get("files") or [])
     remove = remover or (lambda paths: recyclebin.send_to_recycle(paths))
-    failed = set(remove(files) or []) if files else set()
-    removed = [path for path in files if path not in failed and not os.path.exists(path)]
+    failed = []
+    try:
+        failed_paths = set(remove(files) or []) if files else set()
+    except Exception as exc:
+        failed_paths = set(files)
+        failed.append(f"文件移入回收站失败：{exc}")
+    for path in files:
+        if path in failed_paths or os.path.lexists(path):
+            failed.append(f"文件未能移入回收站：{path}")
+    removed = [path for path in files if path not in failed_paths and not os.path.lexists(path)]
     sql_done = 0
     for job in plan.get("sql_jobs") or []:
-        if apply_sql(job.get("path"), job.get("statements") or []):
+        path = job.get("path") or "（未知路径）"
+        exception_reported = False
+        try:
+            applied = apply_sql(job.get("path"), job.get("statements") or [])
+        except Exception as exc:
+            applied = False
+            exception_reported = True
+            failed.append(f"数据库清理失败：{path}（{exc}）")
+        if applied:
             sql_done += 1
+        elif not exception_reported:
+            failed.append(f"数据库清理失败或数据源不可用：{path}")
     reg_done = 0
     for group in plan.get("groups") or []:
         try:
-            reg_done += registry.group_clean(group)
-        except Exception:
-            continue
+            cleaned = registry.group_clean(group)
+            reg_done += cleaned
+            remaining, available = registry.group_count_status(group)
+            if not available or remaining:
+                failed.append(f"注册表清理未完成：{group}（仍有 {remaining} 条或数据源不可用）")
+        except Exception as exc:
+            failed.append(f"注册表清理失败：{group}（{exc}）")
     extra = 0
-    if "userassist" in (plan.get("extras") or []):
-        extra += _clear_userassist()
-    if "ie" in (plan.get("extras") or []):
-        extra += _clear_values(r"Software\Microsoft\Internet Explorer\TypedURLs")
-    if "wmp" in (plan.get("extras") or []):
-        extra += _clear_values(r"Software\Microsoft\MediaPlayer\Player\RecentFileList")
-    return {"files": len(removed), "sql": sql_done, "registry": reg_done + extra, "failed": list(failed)}
+    for key, label, action in (
+            ("userassist", "软件使用痕迹", _clear_userassist),
+            ("ie", "IE 历史", lambda: _clear_values(r"Software\Microsoft\Internet Explorer\TypedURLs")),
+            ("wmp", "媒体播放记录", lambda: _clear_values(r"Software\Microsoft\MediaPlayer\Player\RecentFileList"))):
+        if key not in (plan.get("extras") or []):
+            continue
+        try:
+            cleaned = action()
+            extra += cleaned
+            if not cleaned:
+                failed.append(f"{label}清理未完成：没有记录被清除或数据源不可用")
+        except Exception as exc:
+            failed.append(f"{label}清理失败：{exc}")
+    return {"files": len(removed), "sql": sql_done, "registry": reg_done + extra,
+            "failed": list(dict.fromkeys(failed))}

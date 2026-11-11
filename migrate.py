@@ -590,6 +590,12 @@ def _write_exclusive(path: str, data: bytes) -> str:
             return candidate
         except OSError:
             if os.name == "nt":
+                # Windows 上句柄没关就删不掉，残缺的恢复文件会留下来。先关再删。
+                try:
+                    os.close(out)
+                except OSError:
+                    pass
+                out = None
                 try:
                     safepath.unlink_regular(
                         candidate, [os.path.dirname(candidate) or "."])
@@ -608,7 +614,8 @@ def _write_exclusive(path: str, data: bytes) -> str:
                     if parent_fd is not None:
                         os.close(parent_fd)
         finally:
-            os.close(out)
+            if out is not None:
+                os.close(out)
     return ""
 
 
@@ -817,7 +824,10 @@ def _verified_unlink_windows(path: str, expected_size: int, expected_hash: str,
                     return False
                 digest.update(buf.raw[:got.value])
                 pending -= got.value
-        _note_full_read(info)
+        try:
+            _note_full_read(os.stat(path, follow_symlinks=False))
+        except OSError:
+            _note_full_read(info)
         if digest.hexdigest() != expected_hash:
             return False
         again = _ByHandle()
