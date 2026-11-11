@@ -189,8 +189,11 @@ def walk_files(root):
             continue
 
 
-def remove_empty_dirs(root: str) -> int:
-    """自底向上删除 root 之下的空目录，不删除 root 本身。"""
+def remove_empty_dirs(root: str, skip=None) -> int:
+    """自底向上删除 root 之下的空目录，不删除 root 本身。
+
+    skip 是可选谓词：命中的目录不删（供调用方接入永不清理硬名单等保护）。
+    """
     root_norm = norm_path(root)
     dirs = []
     stack = [root]
@@ -210,6 +213,8 @@ def remove_empty_dirs(root: str) -> int:
     removed = 0
     for path in sorted(dirs, key=len, reverse=True):
         if norm_path(path) == root_norm:
+            continue
+        if skip is not None and skip(path):
             continue
         try:
             os.rmdir(path)

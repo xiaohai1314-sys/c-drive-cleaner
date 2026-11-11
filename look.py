@@ -1,6 +1,7 @@
 """界面素材：圆角按钮、勾选框、文件图标、导航图标。用 Pillow 画，避免商标图案。"""
 import io
 import os
+import sys
 
 FAMILY = "Microsoft YaHei UI"
 _CACHE = {}
@@ -179,21 +180,143 @@ def category_icon(name, checked=False):
     return _cached(("cat", name, checked), draw)
 
 
+_VIDEO_EXTS = {
+    ".mp4", ".mov", ".mkv", ".avi", ".wmv", ".flv", ".webm", ".m4v",
+    ".mpg", ".mpeg", ".3gp", ".ts", ".rmvb", ".vob",
+}
+
+
+def _com_method(obj, index, restype, argtypes):
+    """取 COM 对象虚表里的方法，包装成可调用对象。"""
+    import ctypes
+    vtable = ctypes.cast(obj, ctypes.POINTER(ctypes.c_void_p))[0]
+    address = ctypes.cast(vtable, ctypes.POINTER(ctypes.c_void_p))[index]
+    return ctypes.CFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(address)
+
+
+def _shell_thumb_image(path, size):
+    """用资源管理器的缩略图接口（IShellItemImageFactory）取视频画面。
+
+    返回 PIL Image（RGB），任何一步失败返回 None，由调用方回退占位图。
+    只用系统接口，不引第三方库；非 Windows 直接返回 None。
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                    ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
+
+        def __init__(self, text):
+            super().__init__()
+            parts = text.strip("{}").split("-")
+            self.Data1 = int(parts[0], 16)
+            self.Data2 = int(parts[1], 16)
+            self.Data3 = int(parts[2], 16)
+            tail = bytes.fromhex(parts[3] + parts[4])
+            for index, byte in enumerate(tail):
+                self.Data4[index] = byte
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG),
+                    ("biHeight", wintypes.LONG), ("biPlanes", wintypes.WORD),
+                    ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                    ("biSizeImage", wintypes.DWORD),
+                    ("biXPelsPerMeter", wintypes.LONG),
+                    ("biYPelsPerMeter", wintypes.LONG),
+                    ("biClrUsed", wintypes.DWORD),
+                    ("biClrImportant", wintypes.DWORD)]
+
+    shell32 = ctypes.windll.shell32
+    ole32 = ctypes.windll.ole32
+    gdi32 = ctypes.windll.gdi32
+    ole32.CoInitializeEx(None, 2)  # COINIT_APARTMENTTHREADED，已初始化时忽略结果
+
+    iid = GUID("bcc18b79-ba16-442f-80c4-8a59c30c463b")  # IShellItemImageFactory
+    factory = ctypes.c_void_p()
+    hr = shell32.SHCreateItemFromParsingName(
+        ctypes.c_wchar_p(path), None, ctypes.byref(iid), ctypes.byref(factory))
+    if hr != 0 or not factory:
+        return None
+    hbmp = wintypes.HBITMAP()
+    try:
+        get_image = _com_method(factory, 3, ctypes.c_long,
+                                [ctypes.c_long, ctypes.c_long, ctypes.c_ulong,
+                                 ctypes.POINTER(wintypes.HBITMAP)])
+        # SIZE(cx=size, cy=size)，SIIGBF_BIGGERSIZEOK=0x1，要真画面不要图标
+        hr = get_image(factory, size, size, 0x1, ctypes.byref(hbmp))
+        if hr != 0 or not hbmp:
+            return None
+
+        class BITMAP(ctypes.Structure):
+            _fields_ = [("bmType", wintypes.LONG), ("bmWidth", wintypes.LONG),
+                        ("bmHeight", wintypes.LONG), ("bmWidthBytes", wintypes.LONG),
+                        ("bmPlanes", wintypes.WORD), ("bmBitsPixel", wintypes.WORD),
+                        ("bmBits", ctypes.c_void_p)]
+
+        info = BITMAP()
+        if not gdi32.GetObjectW(hbmp, ctypes.sizeof(info), ctypes.byref(info)):
+            return None
+        width, height = int(info.bmWidth), abs(int(info.bmHeight))
+        if width <= 0 or height <= 0:
+            return None
+        header = BITMAPINFOHEADER()
+        header.biSize = ctypes.sizeof(header)
+        header.biWidth = width
+        header.biHeight = -height  # 负数 = 自上而下
+        header.biPlanes = 1
+        header.biBitCount = 32
+        buffer = ctypes.create_string_buffer(width * height * 4)
+        hdc = gdi32.CreateCompatibleDC(None)
+        try:
+            got = gdi32.GetDIBits(hdc, hbmp, 0, height, buffer,
+                                  ctypes.byref(header), 0)
+        finally:
+            gdi32.DeleteDC(hdc)
+        if not got:
+            return None
+        from PIL import Image
+        image = Image.frombuffer("RGBA", (width, height), buffer,
+                                 "raw", "BGRA", width * 4, 1)
+        return image.convert("RGB")
+    except Exception:
+        return None
+    finally:
+        if hbmp:
+            gdi32.DeleteObject(hbmp)
+        try:
+            release = _com_method(factory, 2, ctypes.c_ulong, [])
+            release(factory)
+        except Exception:
+            pass
+
+
 def thumb_for(path, size=90, weight=None):
-    """普通图片，或能还原的微信 .dat。铺满裁切成正方形，左下角半透明标出大小。失败返回 None。"""
+    """普通图片、能还原的微信 .dat，或视频的系统缩略图。
+
+    铺满裁切成正方形，左下角半透明标出大小。视频取不到系统缩略图时
+    返回 None，由界面回退到 video_tile 占位图。失败返回 None。
+    """
     import datdecode
     from PIL import Image
     ext = os.path.splitext(path)[1].lower()
+    image = None
     try:
         if ext == ".dat":
             blob = datdecode.decode_file(path)
-            if not blob:
-                return None
-            image = Image.open(io.BytesIO(blob))
+            if blob:
+                image = Image.open(io.BytesIO(blob))
         else:
             image = Image.open(path)
-        image = image.convert("RGB")
+        if image is not None:
+            image = image.convert("RGB")
     except Exception:
+        image = None
+    if image is None and ext in _VIDEO_EXTS:
+        image = _shell_thumb_image(path, size)
+    if image is None:
         return None
     side = min(image.width, image.height)
     left = (image.width - side) // 2

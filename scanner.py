@@ -20,6 +20,36 @@ def match_name(name: str, patterns) -> bool:
     return any(fnmatch.fnmatch(lowered, p.lower()) for p in patterns)
 
 
+def _exclude_patterns(patterns):
+    """把规则中的裸扩展名（如 .pdf）解释为完整文件名后缀。"""
+    return tuple(
+        "*" + pattern
+        if (pattern.startswith(".") and pattern[1:].isascii()
+            and pattern[1:].isalnum()) else pattern
+        for pattern in patterns
+    )
+
+
+def name_allowed(name: str, cat) -> bool:
+    """patterns 命中且未被 exclude 排除（规则 v2 的 filtration）。"""
+    if not match_name(name, getattr(cat, "patterns", ("*",))):
+        return False
+    exclude = getattr(cat, "exclude", ()) or ()
+    if exclude and match_name(name, _exclude_patterns(exclude)):
+        return False
+    return True
+
+
+def age_allowed(mtime, cat, now=None) -> bool:
+    """规则 v2 的 filetimelimit：文件不够老时不动。"""
+    minutes = int(getattr(cat, "min_age_minutes", 0) or 0)
+    if minutes <= 0:
+        return True
+    import time
+    current = time.time() if now is None else now
+    return current - float(mtime or 0) >= minutes * 60
+
+
 def recycle_bin_size(drives=None):
     total_size = 0
     total_items = 0
@@ -41,6 +71,9 @@ def scan_category(cat):
     if cat.kind == "recyclebin":
         return recycle_bin_size(cat.paths)
 
+    if cat.kind == "regleftover":
+        return -1, len(cat.paths or [])
+
     if cat.kind == "command":
         if cat.size_fn is None:
             return -1, 0
@@ -55,21 +88,26 @@ def scan_category(cat):
         if not os.path.exists(root):
             continue
         if os.path.isfile(root):
-            if not match_name(os.path.basename(root), cat.patterns):
+            if not name_allowed(os.path.basename(root), cat):
                 continue
             try:
+                if not age_allowed(os.path.getmtime(root), cat):
+                    continue
                 total += os.path.getsize(root)
                 count += 1
             except OSError:
                 pass
             continue
         for entry in walk_files(root):
-            if not match_name(entry.name, cat.patterns):
+            if not name_allowed(entry.name, cat):
                 continue
             if is_runtime_path(entry.path):
                 continue
             try:
-                total += entry.stat(follow_symlinks=False).st_size
+                info = entry.stat(follow_symlinks=False)
+                if not age_allowed(info.st_mtime, cat):
+                    continue
+                total += info.st_size
                 count += 1
             except OSError:
                 continue

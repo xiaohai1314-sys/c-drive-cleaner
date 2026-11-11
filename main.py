@@ -45,6 +45,7 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(APP_DIR, "logs")
+registry.set_backup_root(os.path.join(LOG_DIR, "backups"))
 
 PAGE = "#f7fbfe"
 CARD = "#ffffff"
@@ -524,7 +525,7 @@ class App(_TkRoot):
             tk.Label(holder, image=art, bg=PAGE).pack()
             look.Tick(holder, var, command=lambda c=cat, v=var: on_toggle(c, v.get()),
                       bg=PAGE, size=16).place_over(holder)
-            name = tk.Label(card, text=cat.name, bg=PAGE, fg=TEXT,
+            name = tk.Label(card, text=self._display_category_name(cat), bg=PAGE, fg=TEXT,
                             font=look.tk_font(9), wraplength=92, justify="center")
             name.pack(pady=(4, 0))
             Pill(card, self._size_text(cat.key), ORANGE).pack(pady=(2, 6))
@@ -628,7 +629,7 @@ class App(_TkRoot):
         except OSError:
             pass
 
-    def _confirm_paths(self, paths, title, note):
+    def _confirm_paths(self, paths, title, note, show_size=True):
         paths = list(paths or [])
         if not paths:
             messagebox.showinfo("提示", "没有可处理的文件。")
@@ -640,13 +641,17 @@ class App(_TkRoot):
         dialog.geometry("560x420")
         tk.Label(dialog, text=note, bg=WHITE, fg=TEXT, justify="left", wraplength=520,
                  font=("Microsoft YaHei UI", 10)).pack(anchor="w", padx=16, pady=(14, 4))
-        total = 0
-        for path in paths:
-            try:
-                total += os.path.getsize(path)
-            except OSError:
-                pass
-        tk.Label(dialog, text=f"共 {len(paths)} 个，约 {utils.fmt_size(total)}",
+        if show_size:
+            total = 0
+            for path in paths:
+                try:
+                    total += os.path.getsize(path)
+                except OSError:
+                    pass
+            summary = f"共 {len(paths)} 个，约 {utils.fmt_size(total)}"
+        else:
+            summary = f"共 {len(paths)} 个"
+        tk.Label(dialog, text=summary,
                  bg=WHITE, fg=RED, font=("Microsoft YaHei UI", 10, "bold")).pack(anchor="w", padx=16)
         box = tk.Text(dialog, height=14, bg="#f7f9fc", relief="flat",
                       font=("Microsoft YaHei UI", 9))
@@ -678,6 +683,32 @@ class App(_TkRoot):
         dialog.grab_set()
         dialog.wait_window()
         return result["ok"]
+
+    def _confirm_leftover_items(self, chosen):
+        """残留类（目录/注册表）逐项列表确认：判定只是启发式，删前必须让
+        用户看到每一个具体条目；在列表框点取消就剔除该类，其余类别照常。"""
+        kept = []
+        for cat in chosen:
+            if cat.key == "app_leftovers":
+                ok = self._confirm_paths(
+                    list(cat.paths or []), "确认卸载残留目录",
+                    "以下目录在已安装软件里找不到对应项，将整体移到回收站"
+                    "（可恢复）。\n请逐个核对，认出还在用的软件就点取消。")
+            elif cat.kind == "regleftover":
+                display = [str(entry).replace("::", "\\", 1)
+                           for entry in cat.paths or []]
+                ok = self._confirm_paths(
+                    display, "确认注册表残留键",
+                    "以下注册表键未能与已安装软件条目匹配。为避免名称误判"
+                    "删除整棵子树，只会删除确认无子键的单个键（该键自身的值"
+                    "也会删除）；含子键或无法确认结构的项目会跳过。删除前会"
+                    "自动导出 .reg 备份。\n请逐项核对，认出仍在用的软件就点取消。",
+                    show_size=False)
+            else:
+                ok = True
+            if ok:
+                kept.append(cat)
+        return kept
 
     def _show_text_file(self, path):
         window = tk.Toplevel(self)
@@ -828,7 +859,7 @@ class App(_TkRoot):
         folded = getattr(self, "_clean_folded", set())
         self._clean_folded = folded
         for key, title, note, cats in (("rec", "推荐清理项", "系统和软件的垃圾和无用文件，可放心清理", recommended),
-                                       ("confirm", "谨慎清理项", "系统和软件的数据缓存，可按需选择", confirm)):
+                                       ("confirm", "谨慎清理项", "含需确认的数据及不可恢复日志，勾选前请查看提示", confirm)):
             if not cats:
                 continue
             label = self._section_title(self.clean_body, title, note, extra=self._section_sizes(cats),
@@ -844,6 +875,11 @@ class App(_TkRoot):
         else:
             self._clean_folded.add(key)
         self.after(1, self._refresh_clean_cards)
+
+    def _display_category_name(self, cat):
+        if getattr(cat, "irreversible_log", False):
+            return f"{cat.name}（日志不可恢复）"
+        return cat.name
 
     def _cat_tip(self, cat):
         """清理卡片的悬停说明：做什么、动哪些位置，让人知道删的是什么。"""
@@ -2346,15 +2382,20 @@ class App(_TkRoot):
         if not chosen:
             messagebox.showinfo("提示", "请先勾选要清理的项目。")
             return
+        chosen = self._confirm_leftover_items(chosen)
+        if not chosen:
+            messagebox.showinfo("提示", "没有可清理的项目。")
+            return
         lines = [f"即将清理 {len(chosen)} 项：", ""]
         for cat in chosen:
-            lines.append(f"· {cat.name}  {self._size_text(cat.key)}")
+            lines.append(f"· {self._display_category_name(cat)}  {self._size_text(cat.key)}")
         deep = [c for c in chosen if c.requires_confirm]
         if deep:
             lines.append("")
-            lines.append("以下操作不可恢复：")
+            lines.append("以下操作请确认：")
             for cat in deep:
-                lines.append(f"· {cat.name}：{cat.warning or cat.note or cat.describe}")
+                suffix = "（移到回收站，可恢复）" if getattr(cat, "recycle", False) else ""
+                lines.append(f"· {self._display_category_name(cat)}：{cat.warning or cat.note or cat.describe}{suffix}")
         lines.extend(["", "确定继续？"])
         if self._cleaning:
             return
@@ -2369,6 +2410,10 @@ class App(_TkRoot):
             messagebox.showinfo("提示", "没有可清理的项目。")
             return
         if self._cleaning:
+            return
+        chosen = self._confirm_leftover_items(chosen)
+        if not chosen:
+            messagebox.showinfo("提示", "没有可清理的项目。")
             return
         if not messagebox.askyesno("确认清理", "确定清理这些项目？", icon="warning"):
             return

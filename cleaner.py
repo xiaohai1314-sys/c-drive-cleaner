@@ -5,6 +5,7 @@ import stat
 import subprocess
 import time
 
+import recyclebin
 import safepath
 import scanner
 from utils import (fmt_size, is_runtime_path, is_within, norm_path,
@@ -33,20 +34,133 @@ def _decode(data: bytes) -> str:
     return data.decode("utf-8", "replace")
 
 
+def _running_processes():
+    """当前进程名集合（小写）。非 Windows 或读取失败返回空集。"""
+    if os.name != "nt":
+        return set()
+    try:
+        proc = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            timeout=30,
+        )
+    except Exception:
+        return set()
+    names = set()
+    for line in _decode(proc.stdout or b"").splitlines():
+        line = line.strip()
+        if line.startswith('"'):
+            name = line.split('"')[1] if '"' in line[1:] else ""
+            if name:
+                names.add(name.lower())
+    return names
+
+
+def _clean_reg_leftovers(cat, result, log):
+    """注册表残留：逐个键先备份后删除，备份失败就跳过，绝不裸删。"""
+    import registry
+    for entry in cat.paths or []:
+        hive, sep, rel = str(entry).partition("::")
+        if not sep or hive not in ("HKCU", "HKLM") or not rel:
+            result.skipped += 1
+            continue
+        if not registry.is_leaf_key_at(hive, rel):
+            result.skipped += 1
+            result.errors.append(f"包含子键或无法确认键结构，已跳过：{hive}\\{rel}")
+            continue
+        label = rel.rsplit("\\", 1)[-1]
+        if not registry.backup_hive_key(hive, rel, label):
+            result.skipped += 1
+            result.errors.append(f"备份失败，已跳过：{hive}\\{rel}")
+            continue
+        if registry.delete_leaf_key_at(hive, rel):
+            result.deleted += 1
+        else:
+            result.skipped += 1
+            # 删除可能已删掉一半：立刻用刚导出的 .reg 回滚，避免半删除状态。
+            if registry.restore_backup(hive, rel):
+                result.errors.append(f"删除未完成，已从备份恢复：{hive}\\{rel}")
+            else:
+                backup_file = registry.backup_file_for(hive, rel)
+                result.errors.append(
+                    f"删除未完成且自动恢复失败，请手动导入备份还原：{backup_file}")
+    info = registry.last_backup_info()
+    if info.get("dir"):
+        log(f"    注册表备份在 {info['dir']}")
+    if result.errors:
+        for message in result.errors[:5]:
+            log(f"    {message}")
+    return result
+
+
 def clean_category(cat, log=lambda message: None):
     result = CleanResult(cat)
     if cat.kind == "recyclebin":
         return _empty_recycle_bin(cat, result, log)
+    if cat.kind == "regleftover":
+        return _clean_reg_leftovers(cat, result, log)
     if cat.kind == "eventlogs":
         return _clear_event_logs(cat, result, log)
     if cat.kind == "searchindex":
         return _reset_search_index(cat, result, log)
     if cat.kind == "command":
         return _run_command(cat, result, log)
+    absent = [name for name in (getattr(cat, "process_absent", ()) or ())]
+    if absent:
+        running = _running_processes()
+        hit = [name for name in absent if name.lower() in running]
+        if hit:
+            result.message = f"{'、'.join(hit)} 正在运行，已跳过"
+            log(f"    {result.message}")
+            return result
     return _clean_files(cat, result, log)
 
 
+def _recycle_roots(cat, result, log):
+    """把握不高的类别（如卸载残留目录）：整目录送回收站，不做永久删除。
+
+    送走之前仍过全部硬性检查：重解析点、永不清理名单、受保护路径。
+    """
+    untrusted = bool(getattr(cat, "untrusted", False))
+    for root in cat.paths or []:
+        if safepath.is_reparse_point(root) or os.path.islink(root):
+            result.skipped += 1
+            continue
+        if not os.path.lexists(root):
+            continue
+        if safepath.execution_forbidden(root, untrusted=untrusted):
+            result.skipped += 1
+            continue
+        size = 0
+        count = 0
+        if os.path.isfile(root):
+            try:
+                size = os.path.getsize(root)
+            except OSError:
+                size = 0
+            count = 1
+        else:
+            for entry in walk_files(root):
+                count += 1
+                try:
+                    size += entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+        failed = recyclebin.send_to_recycle([root])
+        if failed:
+            result.skipped += 1
+            result.errors.append(f"送回收站失败，已保留：{root}")
+            continue
+        result.deleted += count
+        result.freed += size
+        log(f"    已移到回收站：{root}")
+    return result
+
+
 def _clean_files(cat, result, log):
+    if getattr(cat, "recycle", False):
+        return _recycle_roots(cat, result, log)
     allowed = [norm_path(path) for path in cat.paths]
     untrusted = bool(getattr(cat, "untrusted", False))
 
@@ -57,12 +171,14 @@ def _clean_files(cat, result, log):
         if not os.path.lexists(root):
             continue
         if os.path.isfile(root):
-            _delete_file(root, allowed, cat.patterns, result, untrusted)
+            _delete_file(root, allowed, cat.patterns, result, untrusted, cat)
             continue
         for entry in walk_files(root):
-            _delete_file(entry.path, allowed, cat.patterns, result, untrusted)
-        if cat.prune_dirs:
-            removed = remove_empty_dirs(root)
+            _delete_file(entry.path, allowed, cat.patterns, result, untrusted, cat)
+        if cat.prune_dirs and not safepath.is_never_clean(root):
+            # 空目录裁剪同样受永不清理硬名单约束：文件删不掉的区域，
+            # 它的空子目录也不许摘。
+            removed = remove_empty_dirs(root, skip=safepath.is_never_clean)
             if removed:
                 log(f"    移除空目录 {removed} 个")
 
@@ -72,7 +188,7 @@ def _clean_files(cat, result, log):
     return result
 
 
-def _delete_file(path, allowed, patterns, result, untrusted=False):
+def _delete_file(path, allowed, patterns, result, untrusted=False, cat=None):
     if is_runtime_path(path):
         return
     if safepath.execution_forbidden(path, untrusted=untrusted):
@@ -81,7 +197,18 @@ def _delete_file(path, allowed, patterns, result, untrusted=False):
     if safepath.is_password_store(path):
         result.skipped += 1
         return
-    if not scanner.match_name(os.path.basename(path), patterns):
+    if cat is not None:
+        if not scanner.name_allowed(os.path.basename(path), cat):
+            return
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            # 修改时间确认不了就不能按“足够旧”处理：跳过并计数，不删。
+            result.skipped += 1
+            return
+        if not scanner.age_allowed(mtime, cat):
+            return
+    elif not scanner.match_name(os.path.basename(path), patterns):
         return
     if not is_within(path, allowed):
         result.skipped += 1

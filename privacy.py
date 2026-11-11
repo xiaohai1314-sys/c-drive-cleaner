@@ -732,6 +732,9 @@ def _clear_values(path) -> int:
         import winreg
     except ImportError:
         return 0
+    import registry
+    if not registry.backup_key(path):
+        return 0
     deleted = 0
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_ALL_ACCESS) as key:
@@ -760,7 +763,10 @@ def _clear_userassist() -> int:
         import winreg
     except ImportError:
         return 0
+    import registry
     base = r"Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+    if not registry.backup_key(base, "userassist"):
+        return 0
     deleted = 0
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, base) as root:
@@ -834,5 +840,8 @@ def apply_plan(plan, remover=None) -> dict:
                 failed.append(f"{label}清理未完成：没有记录被清除或数据源不可用")
         except Exception as exc:
             failed.append(f"{label}清理失败：{exc}")
+    backup = registry.last_backup_info()
     return {"files": len(removed), "sql": sql_done, "registry": reg_done + extra,
-            "failed": list(dict.fromkeys(failed))}
+            "failed": list(dict.fromkeys(failed)),
+            "backup_dir": backup.get("dir", ""),
+            "backup_failed": backup.get("failed", [])}
