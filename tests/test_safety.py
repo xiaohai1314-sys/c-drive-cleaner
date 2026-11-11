@@ -2,6 +2,7 @@
 import os
 import shutil
 import sqlite3
+import stat
 import tempfile
 import unittest
 from unittest import mock
@@ -1051,23 +1052,27 @@ class FourthReviewTests(unittest.TestCase):
                 handle.write("local")
             with open(secret, "w", encoding="utf-8") as handle:
                 handle.write("secret")
-            real_remove = os.remove
+            real_open = os.open
 
-            def raced_remove(path):
-                parent = os.path.dirname(path)
-                if os.path.basename(path) == "victim.txt" and not os.path.islink(parent):
-                    os.rename(parent, parent + ".moved")
-                    os.symlink(outside, parent)
-                real_remove(path)
+            def raced_open(path, flags, *args, **kwargs):
+                fd = real_open(path, flags, *args, **kwargs)
+                # 挂在 unlink_regular 真正打开文件的那一步，而不是 os.remove。
+                if (os.path.basename(str(path)) == "victim.txt"
+                        and kwargs.get("dir_fd") is not None
+                        and not os.path.islink(allowed)):
+                    os.rename(allowed, allowed + ".moved")
+                    os.symlink(outside, allowed, target_is_directory=True)
+                return fd
 
             cat = type("C", (), {"key": "t", "name": "t"})()
             result = cleaner.CleanResult(cat)
-            with mock.patch("cleaner.os.remove", side_effect=raced_remove):
+            with mock.patch("safepath.os.open", side_effect=raced_open):
                 cleaner._delete_file(victim, [allowed], ("*",), result)
-            self.assertFalse(os.path.lexists(victim))
-            self.assertTrue(os.path.isdir(allowed))
-            self.assertFalse(os.path.islink(allowed))
-            self.assertTrue(os.path.exists(secret))
+            moved = os.path.join(allowed + ".moved", "victim.txt")
+            self.assertEqual(result.deleted, 0)
+            self.assertTrue(os.path.isfile(moved))
+            with open(moved, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "local")
             with open(secret, encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), "secret")
         finally:
@@ -1085,6 +1090,120 @@ class FourthReviewTests(unittest.TestCase):
             os.symlink(real, link, target_is_directory=True)
             found = fastscan.iter_files(link, min_size=0)
             self.assertEqual(found, [])
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
+class FifthReviewTests(unittest.TestCase):
+    def _drive(self, dest_root):
+        def drive(path):
+            full = os.path.abspath(path)
+            root = os.path.abspath(dest_root)
+            if full == root or full.startswith(root + os.sep):
+                return "D:"
+            return "C:"
+        return drive
+
+    def test_directory_backup_added_file_is_not_deleted(self):
+        src = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(src, "keep.txt"), "w", encoding="utf-8") as handle:
+                handle.write("original")
+
+            def robocopy(source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                for name in list(os.listdir(source)):
+                    sp = os.path.join(source, name)
+                    if os.path.isfile(sp) and not os.path.islink(sp):
+                        shutil.copy2(sp, os.path.join(dest, name))
+                return 0
+
+            def plant_and_link(link, target):
+                backup = link.rstrip("\\/") + ".migrate-bak"
+                with open(os.path.join(backup, "extra.txt"), "w", encoding="utf-8") as handle:
+                    handle.write("added-during-window")
+                os.symlink(target, link, target_is_directory=True)
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
+                    mock.patch.object(migrate, "is_junction", return_value=False), \
+                    mock.patch.object(migrate, "create_junction", side_effect=plant_and_link):
+                with self.assertRaises(migrate.MigrateError):
+                    migrate.migrate(src, dest_root)
+            backup = src.rstrip("\\/") + ".migrate-bak"
+            extra = os.path.join(backup, "extra.txt")
+            self.assertTrue(os.path.isfile(extra))
+            with open(extra, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "added-during-window")
+            with open(os.path.join(backup, "keep.txt"), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "original")
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+            shutil.rmtree(src.rstrip("\\/") + ".migrate-bak", ignore_errors=True)
+
+    def test_single_file_change_before_delete_keeps_backup(self):
+        folder = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp(prefix="dest-")
+        try:
+            src = os.path.join(folder, "movie.bin")
+            with open(src, "wb") as handle:
+                handle.write(b"0123456789")
+            hits = {"n": 0}
+            real = migrate._fingerprint
+
+            def fingerprint(path):
+                mark = real(path)
+                if os.path.abspath(path) == os.path.abspath(src):
+                    hits["n"] += 1
+                    if hits["n"] == 3:
+                        with open(path, "ab") as handle:
+                            handle.write(b"X")
+                return mark
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
+                    mock.patch.object(migrate, "_fingerprint", side_effect=fingerprint):
+                with self.assertRaises(migrate.MigrateError):
+                    migrate.migrate_file(src, dest_root)
+            backup = src + ".migrate-bak"
+            self.assertTrue(os.path.isfile(backup))
+            with open(backup, "rb") as handle:
+                self.assertEqual(handle.read(), b"0123456789X")
+            with open(os.path.join(dest_root, "movie.bin"), "rb") as handle:
+                self.assertEqual(handle.read(), b"0123456789")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+
+    def test_shred_swap_before_open_leaves_external_file(self):
+        folder = tempfile.mkdtemp()
+        try:
+            local = os.path.join(folder, "local.txt")
+            external = os.path.join(folder, "external.txt")
+            with open(local, "w", encoding="utf-8") as handle:
+                handle.write("LOCALDATA")
+            with open(external, "w", encoding="utf-8") as handle:
+                handle.write("EXTERNAL")
+            swapped = {"done": False}
+            real_lstat = os.lstat
+
+            def lstat(path, *args, **kwargs):
+                info = real_lstat(path, *args, **kwargs)
+                if (not swapped["done"] and os.path.abspath(path) == os.path.abspath(local)
+                        and not stat.S_ISLNK(info.st_mode)):
+                    swapped["done"] = True
+                    os.rename(local, local + ".real")
+                    os.symlink(external, local)
+                return info
+
+            with mock.patch("os.lstat", side_effect=lstat):
+                with self.assertRaises(Exception):
+                    shredder.shred_file(local)
+            with open(external, "rb") as handle:
+                self.assertEqual(handle.read(), b"EXTERNAL")
+            with open(local + ".real", "rb") as handle:
+                self.assertEqual(handle.read(), b"LOCALDATA")
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 

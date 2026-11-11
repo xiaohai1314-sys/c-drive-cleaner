@@ -10,6 +10,7 @@ import ctypes
 import hashlib
 import os
 import shutil
+import stat
 import subprocess
 
 import safepath
@@ -217,6 +218,73 @@ def _fingerprint(path: str):
     return (size, digest.hexdigest())
 
 
+def _manifest(root: str) -> dict:
+    """普通文件的相对路径 -> (大小, mtime_ns, 整文件摘要)。不进入链接。"""
+    found = {}
+    if not root or os.path.islink(root) or not os.path.isdir(root) or safepath.is_reparse_point(root):
+        return found
+    base = os.path.abspath(root)
+    for entry in utils.walk_files(base):
+        try:
+            info = os.lstat(entry.path)
+        except OSError:
+            continue
+        mark = _fingerprint(entry.path)
+        if mark is None:
+            continue
+        mtime = getattr(info, "st_mtime_ns", int(info.st_mtime * 1_000_000_000))
+        found[os.path.relpath(entry.path, base)] = (mark[0], mtime, mark[1])
+    return found
+
+
+def _backup_matches(root: str, manifest: dict) -> bool:
+    """删除备份前再走一遍：路径、大小、mtime，变化的文件重算整文件摘要。"""
+    if not root or os.path.islink(root) or not os.path.isdir(root) or safepath.is_reparse_point(root):
+        return False
+    base = os.path.abspath(root)
+    found = {}
+    dirs = set()
+    stack = [base]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError:
+            return False
+        for entry in entries:
+            if utils.is_link_like(entry):
+                return False
+            rel = os.path.relpath(entry.path, base)
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    dirs.add(rel)
+                    stack.append(entry.path)
+                elif entry.is_file(follow_symlinks=False):
+                    found[rel] = entry.stat(follow_symlinks=False)
+                else:
+                    return False
+            except OSError:
+                return False
+    if set(found) != set(manifest or {}):
+        return False
+    expected_dirs = set()
+    for rel in manifest or {}:
+        parent = os.path.dirname(rel)
+        while parent and parent not in (os.curdir,):
+            expected_dirs.add(parent)
+            parent = os.path.dirname(parent)
+    if dirs != expected_dirs:
+        return False
+    for rel, info in found.items():
+        size, mtime, digest = manifest[rel]
+        now_mtime = getattr(info, "st_mtime_ns", int(info.st_mtime * 1_000_000_000))
+        again = _fingerprint(os.path.join(base, rel))
+        if (info.st_size != size or now_mtime != mtime
+                or again is None or again != (size, digest)):
+            return False
+    return True
+
+
 def file_inventory(root: str) -> dict:
     """root 下普通文件的相对路径指纹。不进入链接。"""
     found = {}
@@ -268,7 +336,8 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
             remove_tree(dest)
         raise MigrateError(f"复制校验失败（robocopy 返回 {rc}），源目录保持原样")
 
-    fresh = file_inventory(src)
+    fresh_manifest = _manifest(src)
+    fresh = {rel: (size, digest) for rel, (size, _mtime, digest) in fresh_manifest.items()}
     if fresh != original or not inventory_covers(file_inventory(dest), fresh):
         raise MigrateError("源目录在复制后发生变化，源文件和目标副本都已保留")
 
@@ -287,6 +356,9 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
             remove_tree(dest)
         raise MigrateError(
             "建立联接失败，源目录已还原，数据未丢失") from exc
+    if not _backup_matches(backup, fresh_manifest):
+        raise MigrateError(
+            "备份在删除前发生变化，已保留备份，没有删除未校验的内容：" + backup)
     remove_tree(backup)
     log(f"已建立联接：{src} → {dest}")
     return src, dest
@@ -537,14 +609,31 @@ def migrate_file(src: str, dest_root: str, log=lambda _message: None, linker=Non
     again = _fingerprint(src)
     if again != copied:
         raise MigrateError("源文件在删除前已变化，源文件和目标副本都已保留")
+    backup = src + ".migrate-bak"
+    if os.path.lexists(backup):
+        raise MigrateError(f"备份位置已存在，已停止：{backup}")
+    snapshot = os.lstat(src)
+    os.rename(src, backup)
     try:
-        os.remove(src)
+        now = os.lstat(backup)
+        before_mtime = getattr(snapshot, "st_mtime_ns", int(snapshot.st_mtime * 1_000_000_000))
+        now_mtime = getattr(now, "st_mtime_ns", int(now.st_mtime * 1_000_000_000))
+        changed = (
+            stat.S_ISLNK(now.st_mode)
+            or not stat.S_ISREG(now.st_mode)
+            or now.st_size != snapshot.st_size
+            or now_mtime != before_mtime
+            or now.st_dev != snapshot.st_dev
+            or now.st_ino != snapshot.st_ino
+        )
+        checked = _fingerprint(backup)
+        if changed or checked is None or checked != copied:
+            raise MigrateError(f"源文件在删除前已变化，备份已保留：{backup}")
+        safepath.unlink_regular(backup, [os.path.dirname(backup) or "."])
+    except MigrateError:
+        raise
     except OSError as exc:
-        try:
-            os.remove(dest)
-        except OSError:
-            pass
-        raise MigrateError(f"无法移走源文件，已取消：{exc}")
+        raise MigrateError(f"无法移走源文件，备份已保留：{backup}") from exc
 
     try:
         _link_file(dest, src, linker)
