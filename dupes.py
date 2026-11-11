@@ -34,7 +34,7 @@ def _sample_hash(path, size, sample=8192):
 
 KEEP_RULES = (
     ("newest", "保留最新修改"),
-    ("oldest", "保留最早创建"),
+    ("oldest", "保留最早修改"),
     ("shortest", "保留路径最短"),
 )
 _keep_rule = "newest"
