@@ -46,6 +46,21 @@ def fmt_size(num) -> str:
     return f"{num} B"
 
 
+def fmt_size_compact(num) -> str:
+    """侧栏用的短格式，例如 23.2G。"""
+    num = int(num or 0)
+    if num < 1024:
+        return f"{num}B"
+    value = float(num)
+    for unit in ("K", "M", "G", "T"):
+        value /= 1024.0
+        if value < 1024 or unit == "T":
+            if value >= 100 or abs(value - round(value)) < 0.05:
+                return f"{int(round(value))}{unit}"
+            return f"{value:.1f}{unit}"
+    return f"{num}B"
+
+
 def norm_path(path: str) -> str:
     return os.path.normcase(os.path.abspath(path)).rstrip("\\")
 
@@ -54,8 +69,8 @@ def is_within(path: str, roots) -> bool:
     """path 是否位于 roots 中某个目录之下（含等于）。"""
     p = norm_path(path)
     for root in roots:
-        r = norm_path(root)
-        if p == r or p.startswith(r + "\\"):
+        r = norm_path(root).rstrip("/")
+        if p == r or p.startswith(r + "\\") or p.startswith(r + "/"):
             return True
     return False
 

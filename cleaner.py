@@ -5,6 +5,7 @@ import stat
 import subprocess
 import time
 
+import safepath
 import scanner
 from utils import (fmt_size, is_runtime_path, is_within, norm_path,
                    remove_empty_dirs, schedule_delete, walk_files)
@@ -69,6 +70,9 @@ def _clean_files(cat, result, log):
 
 def _delete_file(path, allowed, patterns, result):
     if is_runtime_path(path):
+        return
+    if safepath.is_password_store(path):
+        result.skipped += 1
         return
     if not scanner.match_name(os.path.basename(path), patterns):
         return

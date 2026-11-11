@@ -1,11 +1,28 @@
-"""规则云端更新：从配置的地址拉取 rules.json 并合并到本地。"""
+"""规则云端更新：只接受 http/https，并且拒绝远程下发的命令。"""
 import json
 import os
+import re
+import urllib.parse
 import urllib.request
+
+import safepath
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 RULES_PATH = os.path.join(BASE, "rules.json")
 CONFIG_PATH = os.path.join(BASE, "rules_update.json")
+
+MAX_BYTES = 1_000_000
+MAX_RULES = 200
+_KEY_RE = re.compile(r"^[A-Za-z0-9_\-]{1,80}$")
+_TIERS = {"conservative", "standard", "deep"}
+
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        error = validate_url(newurl)
+        if error:
+            raise urllib.error.URLError(error)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def load_config():
@@ -16,19 +33,121 @@ def load_config():
         return {}
 
 
-def update_rules(url=None):
-    """返回 (新增/更新条数, 总条数, 错误信息或空串)。"""
+def validate_url(url) -> str:
+    """合法时返回空串。只允许 http 和 https。"""
+    if not url or not isinstance(url, str):
+        return "未配置规则更新地址（在 rules_update.json 里填写 url）"
+    parsed = urllib.parse.urlparse(url.strip())
+    if parsed.scheme not in ("http", "https"):
+        return "规则地址只允许 http 或 https"
+    if not parsed.netloc or any(char in parsed.netloc for char in " \t\r\n"):
+        return "规则地址无效"
+    return ""
+
+
+def _bad_path(path) -> str:
+    if not isinstance(path, str) or not path.strip():
+        return "路径为空"
+    if len(path) > 500 or any(ord(char) < 32 for char in path):
+        return "路径含有非法字符"
+    parts = path.replace("/", "\\").split("\\")
+    if ".." in parts:
+        return "路径不能包含 .."
+    name = os.path.basename(path.replace("/", "\\")).lower()
+    if name in safepath.PASSWORD_FILENAMES or "login data" in name:
+        return "远程规则不能删除浏览器密码库"
+    return ""
+
+
+def validate_remote_rule(item) -> str:
+    """合法时返回空串。远程规则只能是文件清理，不能带命令。"""
+    if not isinstance(item, dict):
+        return "规则格式不正确"
+    key = item.get("key")
+    if not isinstance(key, str) or not _KEY_RE.match(key):
+        return "规则 key 不合法"
+    kind = item.get("kind", "files")
+    if kind != "files":
+        return "远程规则不允许 command 或其他可执行类型"
+    command = item.get("command")
+    if command:
+        return "远程规则不允许携带命令"
+    tier = item.get("tier", "standard")
+    if tier not in _TIERS:
+        return "风险档位不合法"
+    for field in ("paths", "glob_dirs", "patterns"):
+        value = item.get(field, [])
+        if value is None:
+            continue
+        if not isinstance(value, list) or len(value) > 80:
+            return f"{field} 格式不正确"
+        for entry in value:
+            if field == "patterns":
+                if not isinstance(entry, str) or len(entry) > 80:
+                    return "匹配模式不合法"
+                continue
+            reason = _bad_path(entry)
+            if reason:
+                return reason
+    for field in ("name", "describe", "warning", "note"):
+        value = item.get(field, "")
+        if value and (not isinstance(value, str) or len(value) > 400):
+            return f"{field} 过长或类型不对"
+    return ""
+
+
+def merge_remote(local, remote):
+    """合并远程规则。返回 (新文档, 新增条数, 拒绝条数, 错误)。"""
+    if not isinstance(remote, dict) or not isinstance(remote.get("categories"), list):
+        return local, 0, 0, "远程规则格式不正确"
+    categories = remote.get("categories") or []
+    if len(categories) > MAX_RULES:
+        return local, 0, 0, "远程规则条数过多"
+    if not isinstance(local, dict):
+        local = {"version": 1, "categories": []}
+    local_cats = list(local.get("categories") or [])
+    existing = {item.get("key") for item in local_cats if isinstance(item, dict)}
+    added = 0
+    rejected = 0
+    for item in categories:
+        reason = validate_remote_rule(item)
+        if reason:
+            rejected += 1
+            continue
+        key = item.get("key")
+        if key in existing:
+            continue
+        cleaned = dict(item)
+        cleaned["kind"] = "files"
+        cleaned.pop("command", None)
+        local_cats.append(cleaned)
+        existing.add(key)
+        added += 1
+    merged = dict(local)
+    merged["categories"] = local_cats
+    return merged, added, rejected, ""
+
+
+def update_rules(url=None, opener=None):
+    """返回 (新增条数, 总条数, 错误信息或空串)。"""
     config = load_config()
     url = url or config.get("url") or ""
-    if not url:
-        return 0, 0, "未配置规则更新地址（在 rules_update.json 里填写 url）"
+    error = validate_url(url)
+    if error:
+        return 0, 0, error
     try:
-        with urllib.request.urlopen(url, timeout=15) as response:
-            remote = json.loads(response.read().decode("utf-8"))
+        if opener is None:
+            opener = urllib.request.build_opener(_SafeRedirect)
+        with opener.open(url, timeout=15) as response:
+            payload = response.read(MAX_BYTES + 1)
     except Exception as exc:
         return 0, 0, f"下载失败：{exc}"
-    if not isinstance(remote, dict) or not isinstance(remote.get("categories"), list):
-        return 0, 0, "远程规则格式不正确"
+    if len(payload) > MAX_BYTES:
+        return 0, 0, "远程规则过大，已拒绝"
+    try:
+        remote = json.loads(payload.decode("utf-8"))
+    except Exception:
+        return 0, 0, "远程规则不是合法的 JSON"
 
     try:
         with open(RULES_PATH, encoding="utf-8") as handle:
@@ -36,20 +155,18 @@ def update_rules(url=None):
     except Exception:
         local = {"version": 1, "categories": []}
 
-    existing = {item.get("key") for item in local.get("categories", [])}
-    added = 0
-    for item in remote["categories"]:
-        key = item.get("key")
-        if not key:
-            continue
-        if key not in existing:
-            local["categories"].append(item)
-            existing.add(key)
-            added += 1
-
+    merged, added, rejected, error = merge_remote(local, remote)
+    if error:
+        return 0, 0, error
+    if added == 0 and rejected:
+        return 0, len(merged.get("categories") or []), f"没有可合并的规则，已拒绝 {rejected} 条"
     try:
         with open(RULES_PATH, "w", encoding="utf-8") as handle:
-            json.dump(local, handle, ensure_ascii=False, indent=2)
+            json.dump(merged, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
     except Exception as exc:
         return 0, 0, f"写入失败：{exc}"
-    return added, len(local["categories"]), ""
+    message = ""
+    if rejected:
+        message = f"另有 {rejected} 条因含命令或路径不合法被拒绝"
+    return added, len(merged.get("categories") or []), message

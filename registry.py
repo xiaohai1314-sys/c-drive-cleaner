@@ -1,7 +1,10 @@
 """注册表痕迹清理：只删除已知的 MRU / 历史记录值，不碰配置项。"""
-import winreg
+try:
+    import winreg
+except ImportError:  # 非 Windows 上保持可导入，调用时按 0 条处理
+    winreg = None
 
-HKCU = winreg.HKEY_CURRENT_USER
+HKCU = winreg.HKEY_CURRENT_USER if winreg is not None else None
 
 TARGETS = [
     {"key": "run_mru", "group": "reg_file", "name": "运行历史",
@@ -63,6 +66,8 @@ def _count_subkeys(key):
 
 
 def _count(target):
+    if winreg is None:
+        return 0
     try:
         with winreg.OpenKey(HKCU, target["path"], 0, winreg.KEY_READ) as key:
             if target["mode"] == "values":
@@ -91,6 +96,8 @@ def _delete_tree(parent, subkey):
 
 def _delete(target):
     deleted = 0
+    if winreg is None:
+        return 0
     try:
         with winreg.OpenKey(HKCU, target["path"], 0, winreg.KEY_ALL_ACCESS) as key:
             if target["mode"] == "values":

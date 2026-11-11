@@ -49,25 +49,26 @@
       "name": "浏览器隐私痕迹",
       "tier": "deep",
       "kind": "files",
-      "describe": "Chrome/Edge/夸克的历史记录、Cookie、登录数据、下载记录",
-      "warning": "会清除浏览历史、已保存的密码，并让网站登录状态失效，不可恢复",
+      "describe": "Chrome/Edge/夸克的历史记录、Cookie 和下载记录，不包含已保存的密码",
+      "warning": "会清除浏览历史并让网站登录状态失效。已保存的密码不会删除",
       "requires_confirm": true,
       "paths": [
         "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\History",
         "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\History-journal",
         "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Cookies",
         "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Cookies-journal",
-        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Login Data",
-        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Web Data",
         "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Top Sites",
         "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Visited Links",
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Web Data",
         "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\History",
         "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\History-journal",
         "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Cookies",
-        "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Login Data",
+        "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Top Sites",
         "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Web Data",
         "%LOCALAPPDATA%\\Quark\\User Data\\*\\History",
-        "%LOCALAPPDATA%\\Quark\\User Data\\*\\Cookies"
+        "%LOCALAPPDATA%\\Quark\\User Data\\*\\History-journal",
+        "%LOCALAPPDATA%\\Quark\\User Data\\*\\Cookies",
+        "%LOCALAPPDATA%\\Quark\\User Data\\*\\Cookies-journal"
       ]
     },
     {

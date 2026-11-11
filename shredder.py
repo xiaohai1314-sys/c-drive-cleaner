@@ -1,7 +1,22 @@
-"""文件粉碎：覆盖写后删除，以及删除后清理空目录。"""
+"""文件粉碎：覆盖写后删除，以及删除后清理空目录。
+
+系统路径直接拒绝。粉碎本身不可恢复，不走回收站。
+"""
 import os
 
+import safepath
 import utils
+
+
+class ShredError(Exception):
+    pass
+
+
+def assert_shreddable(path: str):
+    if safepath.is_protected_path(path):
+        raise ShredError(f"为保护系统，拒绝粉碎：{path}")
+    if not path or not os.path.exists(path):
+        raise ShredError("文件不存在")
 
 
 def shred_file(path, passes=1):
@@ -49,6 +64,7 @@ def _remove_empty_dirs(root):
 
 
 def shred_path(path, passes=1, log=lambda _message: None):
+    assert_shreddable(path)
     if os.path.isfile(path):
         shred_file(path, passes)
         log(path)
