@@ -8,9 +8,12 @@
 任何一步失败都不会丢数据：目标副本在建立联接前一直保留。
 """
 import ctypes
+import hashlib
 import os
+import shutil
 import subprocess
 
+import safepath
 import utils
 
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
@@ -193,13 +196,64 @@ def junction_works(link: str, target: str) -> bool:
     return os.path.exists(os.path.join(link, name))
 
 
-def _rollback_to_source(src: str, dest: str):
-    """把数据从目标搬回源位置并清理目标。"""
+def _fingerprint(path: str):
+    """文件的 (大小, 摘要)。链接返回 None，避免把链接目标当成副本。"""
     try:
-        os.rmdir(src)
+        info = os.lstat(path)
     except OSError:
-        pass
-    _robocopy(dest, src, move=True)
+        return None
+    if safepath.is_reparse_point(path):
+        return None
+    size = info.st_size
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            if size <= 8 * 1024 * 1024:
+                digest.update(handle.read())
+            else:
+                digest.update(handle.read(65536))
+                handle.seek(max(0, size - 65536))
+                digest.update(handle.read(65536))
+                digest.update(str(size).encode("ascii"))
+    except OSError:
+        return None
+    return (size, digest.hexdigest())
+
+
+def file_inventory(root: str) -> dict:
+    """root 下普通文件的相对路径指纹。不进入链接。"""
+    found = {}
+    if not root or not os.path.isdir(root) or safepath.is_reparse_point(root):
+        return found
+    base = os.path.abspath(root)
+    for entry in utils.walk_files(base):
+        mark = _fingerprint(entry.path)
+        if mark is None:
+            continue
+        found[os.path.relpath(entry.path, base)] = mark
+    return found
+
+
+def inventory_covers(have: dict, need: dict) -> bool:
+    """have 是否包含 need 里的每一份，且大小和摘要都相同。"""
+    for rel, mark in (need or {}).items():
+        if not mark or have.get(rel) != mark:
+            return False
+    return True
+
+
+def _rollback_to_source(src: str, dest: str):
+    """把目标副本拷回源位置。校验通过后才删除目标，避免删掉唯一的一份。"""
+    if safepath.is_reparse_point(src):
+        try:
+            os.rmdir(src)
+        except OSError as exc:
+            raise MigrateError(f"无法移除联接，目标副本已保留：{exc}")
+    os.makedirs(src, exist_ok=True)
+    needed = file_inventory(dest)
+    _robocopy(dest, src, move=False)
+    if not inventory_covers(file_inventory(src), needed):
+        raise MigrateError("还原校验失败，目标位置的副本已保留，没有删除唯一的一份")
     if os.path.isdir(dest):
         remove_tree(dest)
 
@@ -210,21 +264,23 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
 
     log(f"复制 {src}")
     log(f"  → {dest}")
-    rc = _robocopy(src, dest, move=True)
-    if rc >= 8:
-        if os.path.isdir(dest):
+    original = file_inventory(src)
+    rc = _robocopy(src, dest, move=False)
+    if rc >= 8 or not inventory_covers(file_inventory(dest), original):
+        if inventory_covers(file_inventory(src), original) and os.path.isdir(dest):
             remove_tree(dest)
-        raise MigrateError(f"复制失败（robocopy 返回 {rc}），未改动源目录")
+        raise MigrateError(f"复制校验失败（robocopy 返回 {rc}），源目录保持原样")
 
-    remaining = count_files(src)
-    if remaining:
-        log(f"源目录仍有 {remaining} 个文件被占用，正在还原…")
-        _robocopy(dest, src, move=False)
-        if os.path.isdir(dest):
-            remove_tree(dest)
-        raise MigrateError(
-            f"{remaining} 个文件被占用无法移动，已全部还原。"
-            "请先完全关闭相关程序（含托盘图标）后重试")
+    for rel in original:
+        path = os.path.join(src, rel)
+        if safepath.is_reparse_point(path):
+            continue
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    if file_inventory(src):
+        raise MigrateError("源目录仍有文件未能移走，目标副本已保留，没有删除唯一的一份")
 
     _remove_junction_dirs(src)
     try:
@@ -259,11 +315,11 @@ def undo(src: str, log=lambda _message: None):
 
     log(f"搬回 {target}")
     log(f"  → {src}")
-    rc = _robocopy(target, src, move=True)
-    remaining = count_files(target)
-    if rc >= 8 or remaining:
+    needed = file_inventory(target)
+    rc = _robocopy(target, src, move=False)
+    if rc >= 8 or not inventory_covers(file_inventory(src), needed):
         raise MigrateError(
-            "数据已搬回大部分，但仍有文件被占用未能搬回，"
+            "搬回校验失败，目标副本已保留，没有删除唯一的一份。"
             f"请检查原位置 {src} 和目标 {target}")
 
     remove_tree(target)
@@ -271,35 +327,211 @@ def undo(src: str, log=lambda _message: None):
     return src
 
 
+_UNINSTALL_KEYS = (
+    ("HKLM", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ("HKLM", r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ("HKCU", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+)
+
+
+def _open_registry():
+    try:
+        import winreg
+    except ImportError:
+        return None
+    return winreg
+
+
+def _enum_values(reg, key):
+    values = {}
+    index = 0
+    while True:
+        try:
+            name, data, _typ = reg.EnumValue(key, index)
+        except OSError:
+            break
+        values[name] = data
+        index += 1
+    return values
+
+
+def _first_exe(text):
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    if text.startswith('"'):
+        end = text.find('"', 1)
+        if end > 1:
+            return text[1:end]
+    return text.split(" ")[0].strip('"')
+
+
+def _location_from_values(values, exists):
+    location = str(values.get("InstallLocation") or "").strip().strip('"')
+    if location and exists(location):
+        return location
+    icon = str(values.get("DisplayIcon") or "").strip().strip('"')
+    if icon:
+        icon = icon.split(",")[0].strip().strip('"')
+        folder = os.path.dirname(icon)
+        if folder and exists(folder):
+            return folder
+    exe = _first_exe(values.get("UninstallString"))
+    folder = os.path.dirname(exe) if exe else ""
+    if folder and exists(folder):
+        return folder
+    return ""
+
+
+def discover_installed(reg=None, environ=None, exists=None):
+    """从卸载注册表发现已安装软件。不提供文档、桌面、下载和系统目录。"""
+    environ = os.environ if environ is None else environ
+    exists = os.path.isdir if exists is None else exists
+    if reg is None:
+        reg = _open_registry()
+    if reg is None:
+        return []
+    hives = {
+        "HKLM": reg.HKEY_LOCAL_MACHINE,
+        "HKCU": reg.HKEY_CURRENT_USER,
+    }
+    seen = set()
+    found = []
+    for hive_name, subpath in _UNINSTALL_KEYS:
+        try:
+            root = reg.OpenKey(hives[hive_name], subpath)
+        except OSError:
+            continue
+        index = 0
+        while True:
+            try:
+                name = reg.EnumKey(root, index)
+            except OSError:
+                break
+            index += 1
+            try:
+                sub = reg.OpenKey(root, name)
+            except OSError:
+                continue
+            values = _enum_values(reg, sub)
+            closer = getattr(sub, "Close", None)
+            if closer:
+                closer()
+            display = str(values.get("DisplayName") or "").strip()
+            if not display:
+                continue
+            if str(values.get("SystemComponent") or "") in ("1", "0x1"):
+                continue
+            try:
+                if int(values.get("SystemComponent") or 0) == 1:
+                    continue
+            except (TypeError, ValueError):
+                pass
+            if values.get("ReleaseType") or values.get("ParentKeyName"):
+                continue
+            location = _location_from_values(values, exists)
+            if not location:
+                continue
+            if safepath.migration_forbidden(location, environ):
+                continue
+            marker = safepath.normalize(location).lower()
+            if marker in seen:
+                continue
+            seen.add(marker)
+            try:
+                size = int(values.get("EstimatedSize") or 0) * 1024
+            except (TypeError, ValueError):
+                size = 0
+            found.append({
+                "name": display,
+                "path": location,
+                "size": max(size, 0),
+                "publisher": str(values.get("Publisher") or ""),
+            })
+        closer = getattr(root, "Close", None)
+        if closer:
+            closer()
+    found.sort(key=lambda item: item["size"], reverse=True)
+    return found
+
+
 def candidate_folders():
-    """常见的、可以安全迁移的大目录（只返回存在的）。"""
-    local = os.environ.get("LOCALAPPDATA", "")
-    roaming = os.environ.get("APPDATA", "")
-    profile = os.environ.get("USERPROFILE", "")
-    raw = [
-        os.path.join(roaming, "Tencent"),
-        os.path.join(local, "Quark"),
-        os.path.join(profile, ".vscode", "extensions"),
-        os.path.join(profile, ".cache"),
-        os.path.join(profile, ".cargo"),
-        os.path.join(profile, ".rustup"),
-        os.path.join(profile, ".gemini"),
-        os.path.join(profile, ".workbuddy-ai"),
-        os.path.join(profile, ".codex"),
-        os.path.join(local, "Programs"),
-        os.path.join(local, "Packages"),
-        os.path.join(roaming, "kingsoft"),
-        os.path.join(profile, "Documents"),
-        os.path.join(profile, "Downloads"),
-        os.path.join(profile, "Desktop"),
-    ]
-    seen, out = set(), []
-    for path in raw:
-        if not path:
-            continue
-        norm = os.path.normcase(os.path.abspath(path))
-        if norm in seen or not os.path.isdir(path):
-            continue
-        seen.add(norm)
-        out.append(os.path.abspath(path))
-    return out
+    """软件搬家候选：只来自卸载注册表，不含文档/桌面/下载。"""
+    return [item["path"] for item in discover_installed()]
+
+
+def _same_file_size(src: str, dest: str) -> bool:
+    try:
+        return os.path.getsize(src) == os.path.getsize(dest)
+    except OSError:
+        return False
+
+
+def _link_file(dest: str, src: str, linker=None):
+    if linker is not None:
+        linker(dest, src)
+        return
+    os.symlink(dest, src)
+
+
+def _restore_file(dest: str, src: str) -> bool:
+    """链接失败时把文件拷回原处并删掉目标副本。"""
+    try:
+        if os.path.lexists(src):
+            os.remove(src)
+        shutil.copy2(dest, src)
+        if _same_file_size(dest, src):
+            os.remove(dest)
+            return True
+    except OSError:
+        return False
+    return False
+
+
+def migrate_file(src: str, dest_root: str, log=lambda _message: None, linker=None):
+    """把单个大文件搬到其他盘，并在原路径留下符号链接。
+
+    复制校验失败时源文件不动。链接建不起来时把文件拷回原处。
+    """
+    src = os.path.abspath(src)
+    dest_root = os.path.abspath(dest_root)
+    if safepath.is_system_path(src):
+        raise MigrateError("系统文件不能搬家")
+    if not os.path.isfile(src):
+        raise MigrateError("源文件不存在")
+    if not _drive_of(dest_root):
+        raise MigrateError("目标位置需要指定盘符")
+    if _drive_of(src) == _drive_of(dest_root):
+        raise MigrateError("目标盘必须与源文件所在盘不同")
+    os.makedirs(dest_root, exist_ok=True)
+    dest = os.path.join(dest_root, os.path.basename(src))
+    if os.path.exists(dest):
+        raise MigrateError(f"目标已存在：{dest}")
+
+    log(f"复制 {src}")
+    log(f"  → {dest}")
+    shutil.copy2(src, dest)
+    if not _same_file_size(src, dest):
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise MigrateError("复制校验失败，已取消，源文件未改动")
+
+    try:
+        os.remove(src)
+    except OSError as exc:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise MigrateError(f"无法移走源文件，已取消：{exc}")
+
+    try:
+        _link_file(dest, src, linker)
+    except Exception as exc:
+        if _restore_file(dest, src):
+            raise MigrateError("无法在原位置建立链接，已还原源文件") from exc
+        raise MigrateError(f"链接失败且无法还原，文件仍在：{dest}") from exc
+    log(f"已搬家：{src} → {dest}")
+    return src, dest

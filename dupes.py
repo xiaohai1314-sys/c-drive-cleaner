@@ -32,8 +32,71 @@ def _sample_hash(path, size, sample=8192):
     return digest.hexdigest()
 
 
+def pick_keeper(group) -> str:
+    """每组留下的那一份：优先修改时间最新，其次路径更短，最后按路径排序。"""
+    files = list(group.get("files") or [])
+    if not files:
+        return ""
+    mtimes = group.get("mtimes") or {}
+
+    def sort_key(path):
+        return (mtimes.get(path, 0), -len(path), path)
+
+    return max(files, key=sort_key)
+
+
+def auto_select(groups) -> set:
+    """默认勾选：每组除保留份以外的全部副本。"""
+    chosen = set()
+    for group in groups or []:
+        files = list(group.get("files") or [])
+        if len(files) < 2:
+            continue
+        keeper = pick_keeper(group)
+        for path in files:
+            if path != keeper:
+                chosen.add(path)
+    return chosen
+
+
+def paths_for_cleanup(groups, selected, kinds=None) -> list:
+    """只删除当前类型筛选里看得见、并且勾选了的副本。隐藏分组不参与删除。"""
+    visible = []
+    allowed = set(kinds) if kinds is not None else None
+    for group in groups or []:
+        files = list(group.get("files") or [])
+        if not files:
+            continue
+        if allowed is not None:
+            import filetypes
+            if filetypes.kind_of(files[0]) not in allowed:
+                continue
+        visible.append(group)
+    return paths_to_delete(visible, selected)
+
+
+def paths_to_delete(groups, selected) -> list:
+    """真正可删的路径。每组至少留一份，即使用户把整组都勾上。"""
+    selected = set(selected or [])
+    doomed = []
+    seen = set()
+    for group in groups or []:
+        files = list(group.get("files") or [])
+        if not files:
+            continue
+        chosen = [path for path in files if path in selected]
+        if len(chosen) >= len(files):
+            keeper = pick_keeper(group)
+            chosen = [path for path in chosen if path != keeper]
+        for path in chosen:
+            if path not in seen:
+                seen.add(path)
+                doomed.append(path)
+    return doomed
+
+
 def find_duplicates(roots, min_size=1 << 20, progress=None, cancel=None):
-    """返回重复组列表：{hash, size, files:[path,...]}。"""
+    """返回重复组列表：{hash, size, files:[path,...], mtimes:{path:mtime}}。"""
     import fastscan
     by_size = {}
     for root in roots:
@@ -63,7 +126,19 @@ def find_duplicates(roots, min_size=1 << 20, progress=None, cancel=None):
                     exact.setdefault(digest, []).append(path)
             for digest, same in exact.items():
                 if len(same) > 1:
-                    groups.append({"hash": digest, "size": size, "files": sorted(same)})
+                    ordered = sorted(same)
+                    mtimes = {}
+                    for path in ordered:
+                        try:
+                            mtimes[path] = os.path.getmtime(path)
+                        except OSError:
+                            mtimes[path] = 0
+                    groups.append({
+                        "hash": digest,
+                        "size": size,
+                        "files": ordered,
+                        "mtimes": mtimes,
+                    })
         if progress:
             progress(len(groups))
 
