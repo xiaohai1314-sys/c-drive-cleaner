@@ -254,20 +254,57 @@ def _open_parent_dirfd(parent: str):
             os.close(dirfd)
 
 
-def _verified_unlink(path: str, expected_size: int, expected_hash: str) -> bool:
-    """打开后在同一个句柄上核对大小、身份和整文件摘要，匹配才删除。
+def _read_fd(fd) -> bytes:
+    os.lseek(fd, 0, os.SEEK_SET)
+    chunks = []
+    while True:
+        block = os.read(fd, 1024 * 1024)
+        if not block:
+            break
+        chunks.append(block)
+    return b"".join(chunks)
 
-    不匹配或打不开就留下文件。POSIX 上 unlinkat 仍按名字删除，
-    最后一次核对和 unlink 之间的空隙无法在纯 Python 里关掉。
+
+def _write_exclusive(path: str, data: bytes) -> str:
+    """用 O_CREAT|O_EXCL 把内容写回。原名被占用时改用 .migrate-recovered。"""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    for candidate in (path, path + ".migrate-recovered"):
+        try:
+            out = os.open(candidate, flags, 0o600)
+        except FileExistsError:
+            continue
+        except OSError:
+            continue
+        try:
+            view = memoryview(data)
+            while view:
+                written = os.write(out, view)
+                if written <= 0:
+                    break
+                view = view[written:]
+            os.fsync(out)
+            return candidate
+        finally:
+            os.close(out)
+    return ""
+
+
+def _verified_unlink(path: str, expected_size: int, expected_hash: str):
+    """打开后核对，再删除。返回 (是否干净删除, 说明)。
+
+    POSIX 上删除后文件描述符仍指着原来的 inode。若大小、mtime 或摘要
+    变了，就把该 inode 的内容写回原路径。链接数不为 0 表示删到的不是它。
     """
     if os.name == "nt":
-        return _verified_unlink_windows(path, expected_size, expected_hash)
+        return _verified_unlink_windows(path, expected_size, expected_hash), ""
     parent = os.path.dirname(path) or "."
     name = os.path.basename(path)
     try:
         dirfd = _open_parent_dirfd(parent)
     except OSError:
-        return False
+        return False, ""
     try:
         flags = os.O_RDONLY
         if hasattr(os, "O_NOFOLLOW"):
@@ -277,28 +314,44 @@ def _verified_unlink(path: str, expected_size: int, expected_hash: str) -> bool:
         try:
             fd = os.open(name, flags, dir_fd=dirfd)
         except OSError:
-            return False
+            return False, ""
         try:
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode):
-                return False
+                return False, ""
             if getattr(info, "st_file_attributes", 0) & safepath.FILE_ATTRIBUTE_REPARSE_POINT:
-                return False
+                return False, ""
             if info.st_size != expected_size:
-                return False
+                return False, ""
             if _hash_fd(fd) != expected_hash:
-                return False
+                return False, ""
             again = os.fstat(fd)
             try:
                 named = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
             except OSError:
-                return False
+                return False, ""
             if (again.st_dev != info.st_dev or again.st_ino != info.st_ino
                     or again.st_size != expected_size
                     or named.st_dev != info.st_dev or named.st_ino != info.st_ino):
-                return False
+                return False, ""
             os.unlink(name, dir_fd=dirfd)
-            return True
+            post = os.fstat(fd)
+            pre_mtime = getattr(again, "st_mtime_ns", again.st_mtime)
+            post_mtime = getattr(post, "st_mtime_ns", post.st_mtime)
+            swapped = post.st_nlink != 0
+            changed = (
+                post.st_size != again.st_size
+                or post_mtime != pre_mtime
+                or _hash_fd(fd) != expected_hash
+            )
+            if not swapped and not changed:
+                return True, ""
+            recovered = _write_exclusive(path, _read_fd(fd)) if changed else ""
+            detail = recovered
+            if swapped:
+                note = "删除后链接数不为 0，可能删到了别的目录项"
+                detail = (detail + "；" + note) if detail else note
+            return False, detail or path
         finally:
             os.close(fd)
     finally:
@@ -461,13 +514,20 @@ def _list_remaining(root: str):
 
 def _release_manifest(backup: str, manifest: dict):
     """只删除清单里、且句柄核对通过的文件。其余留下。"""
+    notes = []
     for rel, mark in (manifest or {}).items():
         size, _mtime, digest = mark
-        _verified_unlink(os.path.join(backup, rel), size, digest)
+        clean, detail = _verified_unlink(os.path.join(backup, rel), size, digest)
+        if not clean and detail:
+            notes.append(detail)
     if os.path.isdir(backup) and not os.path.islink(backup):
         for directory in _directories_deepest_first(backup):
             _rmdir_if_empty(directory)
-    return _list_remaining(backup)
+    remaining = _list_remaining(backup)
+    for note in notes:
+        if note not in remaining:
+            remaining.append(note)
+    return remaining
 
 
 def file_inventory(root: str) -> dict:
@@ -848,9 +908,18 @@ def migrate_file(src: str, dest_root: str, log=lambda _message: None, linker=Non
     if os.path.lexists(backup):
         raise MigrateError(f"备份位置已存在，已停止：{backup}")
     os.rename(src, backup)
-    if not _verified_unlink(backup, copied[0], copied[1]):
+    clean, detail = _verified_unlink(backup, copied[0], copied[1])
+    if not clean:
+        remaining = []
+        for candidate in (backup, backup + ".migrate-recovered"):
+            if os.path.lexists(candidate):
+                remaining.append(candidate)
+        if detail and detail not in remaining:
+            remaining.append(detail)
+        if not remaining:
+            remaining = [detail or backup]
         return MigrateResult(
-            src, dest, status="partial", backup=backup, remaining=(backup,))
+            src, dest, status="partial", backup=backup, remaining=tuple(remaining))
 
     try:
         _link_file(dest, src, linker)

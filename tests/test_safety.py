@@ -1592,6 +1592,118 @@ class SixthReviewTests(unittest.TestCase):
             shutil.rmtree(src.rstrip("\\/") + ".migrate-bak", ignore_errors=True)
 
 
+class SeventhReviewTests(unittest.TestCase):
+    def _drive(self, dest_root):
+        def drive(path):
+            full = os.path.abspath(path)
+            root = os.path.abspath(dest_root)
+            if full == root or full.startswith(root + os.sep):
+                return "D:"
+            return "C:"
+        return drive
+
+    def _not_success(self, result):
+        if isinstance(result, migrate.MigrateResult):
+            return not result.ok
+        return False
+
+    def test_single_file_append_before_unlink_is_preserved(self):
+        folder = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp(prefix="dest-")
+        try:
+            src = os.path.join(folder, "movie.bin")
+            with open(src, "wb") as handle:
+                handle.write(b"0123456789")
+            backup = src + ".migrate-bak"
+            real_unlink = os.unlink
+            did = {"n": 0}
+
+            def hooked_unlink(path, *args, **kwargs):
+                if os.path.basename(str(path)) == os.path.basename(backup) and not did["n"]:
+                    did["n"] = 1
+                    with open(backup, "ab") as handle:
+                        handle.write(b"APPENDED")
+                return real_unlink(path, *args, **kwargs)
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
+                    mock.patch("migrate.os.unlink", side_effect=hooked_unlink):
+                result = migrate.migrate_file(src, dest_root)
+            preserved = b""
+            for path in (backup, backup + ".migrate-recovered"):
+                if os.path.isfile(path):
+                    with open(path, "rb") as handle:
+                        preserved = handle.read()
+                    break
+            self.assertEqual(preserved, b"0123456789APPENDED")
+            with open(os.path.join(dest_root, "movie.bin"), "rb") as handle:
+                self.assertEqual(handle.read(), b"0123456789")
+            self.assertTrue(self._not_success(result))
+            self.assertIn(b"APPENDED", self._listed_bytes(result))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+
+    def _listed_bytes(self, result):
+        if not isinstance(result, migrate.MigrateResult):
+            return b""
+        blob = result.warning.encode("utf-8", "replace")
+        for path in result.remaining:
+            if os.path.isfile(path):
+                with open(path, "rb") as handle:
+                    blob += handle.read()
+        return blob
+
+    def test_directory_append_before_unlink_is_preserved(self):
+        src = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(src, "keep.txt"), "wb") as handle:
+                handle.write(b"original")
+
+            def robocopy(source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                for name in os.listdir(source):
+                    sp = os.path.join(source, name)
+                    if os.path.isfile(sp) and not os.path.islink(sp):
+                        shutil.copy2(sp, os.path.join(dest, name))
+                return 0
+
+            def link(link_path, target):
+                os.symlink(target, link_path, target_is_directory=True)
+
+            backup = src.rstrip("\\/") + ".migrate-bak"
+            target = os.path.join(backup, "keep.txt")
+            real_unlink = os.unlink
+            did = {"n": 0}
+
+            def hooked_unlink(path, *args, **kwargs):
+                if os.path.basename(str(path)) == "keep.txt" and not did["n"]:
+                    did["n"] = 1
+                    with open(target, "ab") as handle:
+                        handle.write(b"APPENDED")
+                return real_unlink(path, *args, **kwargs)
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
+                    mock.patch.object(migrate, "is_junction", return_value=False), \
+                    mock.patch.object(migrate, "create_junction", side_effect=link), \
+                    mock.patch("migrate.os.unlink", side_effect=hooked_unlink):
+                result = migrate.migrate(src, dest_root)
+            preserved = b""
+            for path in (target, target + ".migrate-recovered"):
+                if os.path.isfile(path):
+                    with open(path, "rb") as handle:
+                        preserved = handle.read()
+                    break
+            self.assertEqual(preserved, b"originalAPPENDED")
+            self.assertTrue(self._not_success(result))
+            self.assertIn("keep.txt", result.warning)
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+            shutil.rmtree(backup, ignore_errors=True)
+
+
 class FragVizTests(unittest.TestCase):
     def test_grid_follows_real_percentage(self):
         text = """
