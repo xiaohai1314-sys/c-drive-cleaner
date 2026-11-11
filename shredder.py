@@ -67,6 +67,19 @@ def _remove_empty_dirs(root):
             pass
 
 
+def run_batch(paths, shred_fn=None):
+    """逐个粉碎。失败记为 failed，不会当成已完成。"""
+    shred_fn = shred_fn or shred_path
+    records = []
+    for path in paths or []:
+        try:
+            shred_fn(path)
+            records.append({"path": path, "status": "ok"})
+        except Exception as exc:
+            records.append({"path": path, "status": "failed", "error": str(exc)})
+    return records
+
+
 def shred_path(path, passes=1, log=lambda _message: None):
     assert_shreddable(path)
     if os.path.isfile(path):

@@ -271,14 +271,15 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
             remove_tree(dest)
         raise MigrateError(f"复制校验失败（robocopy 返回 {rc}），源目录保持原样")
 
-    for rel in original:
+    for rel, mark in original.items():
         path = os.path.join(src, rel)
+        copied = _fingerprint(os.path.join(dest, rel))
+        current = _fingerprint(path)
+        if current is None or copied is None or current != copied or current != mark:
+            raise MigrateError("源目录在复制后发生变化，源文件和目标副本都已保留")
         if safepath.is_reparse_point(path):
-            continue
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+            raise MigrateError("源路径变成了链接，已停止删除，两边都保留")
+        os.remove(path)
     if file_inventory(src):
         raise MigrateError("源目录仍有文件未能移走，目标副本已保留，没有删除唯一的一份")
 
@@ -510,14 +511,22 @@ def migrate_file(src: str, dest_root: str, log=lambda _message: None, linker=Non
 
     log(f"复制 {src}")
     log(f"  → {dest}")
+    before = _fingerprint(src)
     shutil.copy2(src, dest)
-    if not _same_file_size(src, dest):
+    source_now = _fingerprint(src)
+    copied = _fingerprint(dest)
+    if source_now != before:
+        raise MigrateError("源文件在复制后已变化，源文件和目标副本都已保留")
+    if not _same_file_size(src, dest) or copied is None or copied != source_now:
         try:
             os.remove(dest)
         except OSError:
             pass
         raise MigrateError("复制校验失败，已取消，源文件未改动")
 
+    again = _fingerprint(src)
+    if again != copied:
+        raise MigrateError("源文件在删除前已变化，源文件和目标副本都已保留")
     try:
         os.remove(src)
     except OSError as exc:

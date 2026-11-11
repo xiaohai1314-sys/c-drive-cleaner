@@ -127,17 +127,132 @@ def is_reparse_point(path: str) -> bool:
     return stat.S_ISLNK(info.st_mode)
 
 
-def clean_forbidden(path: str, environ=None) -> bool:
-    """清理执行时再拦一次：文档库、密码库、链接、盘符根和关键系统文件。"""
-    if not path:
+_REMOTE_CACHE_PARTS = {
+    "cache", "caches", "code cache", "gpucache", "gpu cache", "htmlcache",
+    "logs", "log",
+}
+
+
+def _path_parts(path: str):
+    return [part for part in str(path).replace("/", "\\").split("\\") if part]
+
+
+def path_syntax_error(path: str) -> str:
+    """拒绝 ..、UNC 和盘符之外的冒号（备用数据流）。合法时返回空串。"""
+    if path is None:
+        return "路径为空"
+    text = str(path).strip()
+    if not text:
+        return "路径为空"
+    if text.startswith("\\\\") or text.startswith("//"):
+        return "不能指向网络路径"
+    body = text[2:] if len(text) >= 2 and text[1] == ":" else text
+    if ":" in body:
+        return "不能包含备用数据流"
+    if ".." in _path_parts(text):
+        return "路径不能包含 .."
+    return ""
+
+
+def _expand_env(path: str, environ) -> str:
+    import re
+    env = environ if environ is not None else os.environ
+
+    def repl(match):
+        return env.get(match.group(1), match.group(0))
+
+    return re.sub(r"%([^%]+)%", repl, str(path))
+
+
+def _within_root(path: str, root: str) -> bool:
+    if not path or not root:
+        return False
+    target = normalize(path).lower().rstrip("\\/")
+    base = normalize(root).lower().rstrip("\\/")
+    if not base:
+        return False
+    if target == base:
         return True
-    if is_reparse_point(path):
+    return target.startswith(base + "\\") or target.startswith(base + "/")
+
+
+def _remote_pattern_ok(path: str) -> bool:
+    """未展开时，只接受明确的临时目录或 AppData 下的缓存目录前缀。"""
+    folded = str(path).replace("/", "\\")
+    low = folded.lower()
+    if path_syntax_error(folded):
+        return False
+    if low == "%temp%" or low.startswith("%temp%\\"):
+        return True
+    if low == "%tmp%" or low.startswith("%tmp%\\"):
+        return True
+    if low == "%localappdata%\\temp" or low.startswith("%localappdata%\\temp\\"):
+        return True
+    if low.startswith("%localappdata%\\") or low.startswith("%appdata%\\"):
+        parts = [part.lower() for part in _path_parts(folded)]
+        return any(part in _REMOTE_CACHE_PARTS for part in parts)
+    return False
+
+
+def _allow_roots(environ):
+    env = environ if environ is not None else os.environ
+    roots = []
+    for key in ("TEMP", "TMP"):
+        value = env.get(key)
+        if value and not path_syntax_error(value):
+            roots.append(value)
+    local = env.get("LOCALAPPDATA") or ""
+    if local:
+        roots.append(os.path.join(local, "Temp"))
+    return roots
+
+
+def under_remote_allowlist(path: str, environ=None) -> bool:
+    """解析后的路径必须落在用户临时目录，或 Local/Roaming 下的已知缓存目录。"""
+    if path_syntax_error(path):
+        return False
+    expanded = _expand_env(path, environ)
+    if path_syntax_error(expanded):
+        return False
+    # 变量没设时，只认明确的 %TEMP% / %LOCALAPPDATA%\\Temp / AppData 缓存写法。
+    if "%" in expanded:
+        return _remote_pattern_ok(path) and _remote_pattern_ok(expanded)
+    normalized = normalize(expanded)
+    if is_system_path(normalized) or is_user_library(normalized, environ):
+        return False
+    for root in _allow_roots(environ):
+        if _within_root(normalized, root):
+            return True
+    env = environ if environ is not None else os.environ
+    for key in ("LOCALAPPDATA", "APPDATA"):
+        base = env.get(key) or ""
+        if not base or not _within_root(normalized, base):
+            continue
+        parts = [part.lower() for part in _path_parts(normalize(normalized))]
+        if any(part in _REMOTE_CACHE_PARTS for part in parts):
+            return True
+    return False
+
+
+def execution_forbidden(path: str, untrusted=False, environ=None) -> bool:
+    """删除前再检查。不可信规则还必须落在远程允许的根目录里，且不能碰系统目录。"""
+    if not path or path_syntax_error(path):
+        return True
+    if is_reparse_point(path) or os.path.islink(path):
         return True
     if is_password_store(path) or is_user_library(path, environ):
         return True
     if is_drive_root(path) or is_critical_file(path):
         return True
+    if untrusted:
+        if is_system_path(path) or not under_remote_allowlist(path, environ):
+            return True
     return False
+
+
+def clean_forbidden(path: str, environ=None) -> bool:
+    """清理执行时再拦一次：文档库、密码库、链接、盘符根和关键系统文件。"""
+    return execution_forbidden(path, untrusted=False, environ=environ)
 
 
 def is_critical_file(path: str) -> bool:
@@ -147,10 +262,10 @@ def is_critical_file(path: str) -> bool:
 def _under_env_root(path: str) -> bool:
     target = normalize(path).lower().rstrip("\\")
     for root in _env_roots():
-        root = root.rstrip("\\")
+        root = root.rstrip("\\/")
         if not root:
             continue
-        if target == root or target.startswith(root + "\\"):
+        if target == root or target.startswith(root + "\\") or target.startswith(root + "/"):
             return True
     return False
 
@@ -171,9 +286,9 @@ def is_system_path(path: str) -> bool:
         return True
     system = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
     if system:
-        root = normalize(system).lower().rstrip("\\")
-        target = normalize(path).lower().rstrip("\\")
-        if target == root or target.startswith(root + "\\"):
+        root = normalize(system).lower().rstrip("\\/")
+        target = normalize(path).lower().rstrip("\\/")
+        if target == root or target.startswith(root + "\\") or target.startswith(root + "/"):
             return True
     return False
 

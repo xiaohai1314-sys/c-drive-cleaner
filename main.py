@@ -924,15 +924,19 @@ class App(tk.Tk):
                         width=120, height=132)
         card.grid(row=index // 6, column=index % 6, padx=6, pady=6)
         card.pack_propagate(False)
-        var = tk.BooleanVar(value=item["id"] in self.privacy_selected)
+        selectable = privacy.is_selectable(item)
+        var = tk.BooleanVar(value=selectable and item["id"] in self.privacy_selected)
         self._card_vars.append(var)
+        if not selectable:
+            self.privacy_selected.discard(item["id"])
         art = look.category_icon(item.get("name", "项"), False)
         self._photos.append(art)
         holder = tk.Frame(card, bg=CARD)
         holder.pack(pady=(8, 0))
         tk.Label(holder, image=art, bg=CARD).pack()
-        look.Tick(holder, var, command=lambda i=item["id"], v=var: self._toggle_privacy(i, v.get()),
-                  bg=CARD, size=16).place_over(holder)
+        if selectable:
+            look.Tick(holder, var, command=lambda i=item["id"], v=var: self._toggle_privacy(i, v.get()),
+                      bg=CARD, size=16).place_over(holder)
         tk.Label(card, text=item.get("name", ""), bg=CARD, fg=TEXT,
                  font=look.tk_font(8), wraplength=108, justify="center").pack()
         count = int(item.get("count") or 0)
@@ -1889,20 +1893,15 @@ class App(tk.Tk):
         threading.Thread(target=self._shred_worker, args=(paths,), daemon=True).start()
 
     def _shred_worker(self, paths):
-        done = []
-        for path in paths:
-            try:
-                shredder.shred_path(path)
-                done.append(path)
-            except Exception:
-                continue
-        if done:
-            try:
-                history.append_shred_history(LOG_DIR, done)
-            except OSError:
-                pass
+        records = shredder.run_batch(paths)
+        try:
+            history.append_shred_history(LOG_DIR, records)
+        except OSError:
+            pass
+        done = [item["path"] for item in records if item.get("status") == "ok"]
+        failed = [item for item in records if item.get("status") != "ok"]
         self._cleaning = False
-        self.queue.put(("shred_done", done))
+        self.queue.put(("shred_done", done, failed))
 
     def _show_shred_history(self):
         rows = history.load_shred_history(LOG_DIR)
@@ -1947,21 +1946,19 @@ class App(tk.Tk):
 
     # ---------- 动作 ----------
     def start_scan(self):
-        if self._scanning:
-            return
+        gen = self.jobs.start("clean")
         self.scan_complete = False
         self._scanning = True
-        threading.Thread(target=self._scan_worker, daemon=True).start()
+        threading.Thread(target=self._scan_worker, args=(gen,), daemon=True).start()
 
-    def _scan_worker(self):
+    def _scan_worker(self, gen):
         for cat in self.categories:
             try:
                 size, count = scanner.scan_category(cat)
             except Exception:
                 size, count = -1, 0
-            self.queue.put(("scanned", cat.key, size, count))
-        self._scanning = False
-        self.queue.put(("scan_done",))
+            self.queue.put(("scanned", gen, cat.key, size, count))
+        self.queue.put(("scan_done", gen))
 
     def start_clean(self):
         if not self.scan_complete:
@@ -2152,11 +2149,16 @@ class App(tk.Tk):
     def _handle(self, message):
         kind = message[0]
         if kind == "scanned":
-            _, key, size, count = message
+            _, gen, key, size, count = message
+            if not self.jobs.accept("clean", gen):
+                return
             self.results[key] = (size, count)
             self._update_clean_head()
             self._update_sidebar_sizes()
         elif kind == "scan_done":
+            if not self.jobs.accept("clean", message[1]):
+                return
+            self._scanning = False
             self.worker = None
             self.scan_complete = True
             self._refresh_clean_cards()

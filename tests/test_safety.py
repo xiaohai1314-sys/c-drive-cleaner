@@ -701,6 +701,215 @@ class ReviewFixTests(unittest.TestCase):
         self.assertEqual(scanner.visible_large_paths(rows, "archive", "全部"), [r"D:\a.zip"])
 
 
+class ThirdReviewTests(unittest.TestCase):
+    def test_windows_temp_secrets_rejected_at_validate_and_execute(self):
+        env = {
+            "TEMP": r"C:\Users\me\AppData\Local\Temp",
+            "TMP": r"C:\Users\me\AppData\Local\Temp",
+            "LOCALAPPDATA": r"C:\Users\me\AppData\Local",
+            "APPDATA": r"C:\Users\me\AppData\Roaming",
+            "USERPROFILE": r"C:\Users\me",
+            "SystemRoot": r"C:\Windows",
+        }
+        self.assertNotEqual(
+            ruleupdate.remote_target_allowed(r"C:\Windows\Temp\secrets", env), "")
+        self.assertNotEqual(
+            ruleupdate.remote_target_allowed(r"%SystemRoot%\Temp\secrets", env), "")
+        self.assertNotEqual(
+            ruleupdate.remote_target_allowed(r"%TEMP%\..\Windows\Temp\secrets", env), "")
+        self.assertNotEqual(
+            ruleupdate.remote_target_allowed(r"\\server\share\Temp\secrets", env), "")
+        self.assertNotEqual(
+            ruleupdate.remote_target_allowed(r"C:\Users\me\AppData\Local\Temp\note.txt:secret", env), "")
+        self.assertEqual(
+            ruleupdate.remote_target_allowed(r"%TEMP%\Demo\Cache", env), "")
+
+        root = tempfile.mkdtemp()
+        old = {key: os.environ.get(key) for key in ("TEMP", "TMP", "LOCALAPPDATA", "SystemRoot", "USERPROFILE")}
+        try:
+            windows = os.path.join(root, "Windows")
+            os.makedirs(os.path.join(windows, "Temp", "secrets"))
+            secret = os.path.join(windows, "Temp", "secrets", "keep.txt")
+            with open(secret, "w", encoding="utf-8") as handle:
+                handle.write("keep")
+            user_temp = os.path.join(root, "user-temp")
+            os.makedirs(user_temp)
+            os.environ["SystemRoot"] = windows
+            os.environ["TEMP"] = user_temp
+            os.environ["TMP"] = user_temp
+            os.environ["LOCALAPPDATA"] = os.path.join(root, "Local")
+            os.environ["USERPROFILE"] = os.path.join(root, "profile")
+            cat = type("C", (), {
+                "key": "remote", "name": "remote", "paths": [os.path.dirname(secret)],
+                "kind": "files", "patterns": ("*",), "prune_dirs": False, "untrusted": True,
+            })()
+            result = cleaner.clean_category(cat)
+            self.assertTrue(os.path.exists(secret))
+            self.assertEqual(result.deleted, 0)
+            with open(secret, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "keep")
+        finally:
+            for key, value in old.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_clean_root_symlink_is_not_followed(self):
+        folder = tempfile.mkdtemp()
+        try:
+            real = os.path.join(folder, "real")
+            os.makedirs(real)
+            secret = os.path.join(real, "secret.txt")
+            with open(secret, "w", encoding="utf-8") as handle:
+                handle.write("alive")
+            link = os.path.join(folder, "link")
+            os.symlink(real, link, target_is_directory=True)
+            cat = type("C", (), {
+                "key": "t", "name": "t", "paths": [link],
+                "kind": "files", "patterns": ("*",), "prune_dirs": False, "untrusted": False,
+            })()
+            cleaner.clean_category(cat)
+            self.assertTrue(os.path.exists(secret))
+            with open(secret, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "alive")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_directory_migrate_keeps_source_if_it_changes_after_copy(self):
+        src = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp()
+        try:
+            original = os.path.join(src, "a.txt")
+            with open(original, "w", encoding="utf-8") as handle:
+                handle.write("old-content")
+
+            def drive(path):
+                full = os.path.abspath(path)
+                root = os.path.abspath(dest_root)
+                if full == root or full.startswith(root + os.sep):
+                    return "D:"
+                return "C:"
+
+            def robocopy(source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                for name in list(os.listdir(source)):
+                    sp = os.path.join(source, name)
+                    if os.path.isfile(sp) and not os.path.islink(sp):
+                        shutil.copy2(sp, os.path.join(dest, name))
+                with open(os.path.join(source, "a.txt"), "w", encoding="utf-8") as handle:
+                    handle.write("new-content")
+                return 0
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=drive), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
+                    mock.patch.object(migrate, "is_junction", return_value=False):
+                with self.assertRaises(migrate.MigrateError):
+                    migrate.migrate(src, dest_root)
+            with open(original, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "new-content")
+            copied = os.path.join(dest_root, os.path.basename(src), "a.txt")
+            with open(copied, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "old-content")
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+
+    def test_single_file_migrate_detects_same_size_content_change(self):
+        folder = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp(prefix="dest-")
+        try:
+            src = os.path.join(folder, "movie.bin")
+            with open(src, "wb") as handle:
+                handle.write(b"0123456789")
+
+            def drive(path):
+                full = os.path.abspath(path)
+                root = os.path.abspath(dest_root)
+                if full == root or full.startswith(root + os.sep):
+                    return "D:"
+                return "C:"
+
+            real_copy = shutil.copy2
+
+            def copy2(source, dest, *args, **kwargs):
+                real_copy(source, dest, *args, **kwargs)
+                with open(source, "wb") as handle:
+                    handle.write(b"ABCDEFGHIJ")
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=drive), \
+                    mock.patch("migrate.shutil.copy2", side_effect=copy2):
+                with self.assertRaises(migrate.MigrateError):
+                    migrate.migrate_file(src, dest_root)
+            with open(src, "rb") as handle:
+                self.assertEqual(handle.read(), b"ABCDEFGHIJ")
+            with open(os.path.join(dest_root, "movie.bin"), "rb") as handle:
+                self.assertEqual(handle.read(), b"0123456789")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+
+    def test_shred_failure_is_recorded_as_failed(self):
+        folder = tempfile.mkdtemp()
+        try:
+            records = shredder.run_batch(
+                [os.path.join(folder, "missing.bin")],
+                shred_fn=lambda path: (_ for _ in ()).throw(shredder.ShredError("失败")),
+            )
+            self.assertEqual(records[0]["status"], "failed")
+            history.append_shred_history(folder, records)
+            rows = history.load_shred_history(folder)
+            self.assertEqual(rows[0]["status"], "failed")
+            self.assertNotEqual(rows[0]["status"], "ok")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_rules_write_crash_keeps_previous_file(self):
+        folder = tempfile.mkdtemp()
+        path = os.path.join(folder, "rules.json")
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write('{"version": 1, "categories": [{"key": "old", "kind": "files"}]}\n')
+            with mock.patch.object(ruleupdate, "RULES_PATH", path), \
+                    mock.patch("ruleupdate.os.replace", side_effect=OSError("crash")):
+                added, _total, err = ruleupdate.update_rules(
+                    "https://example.com/rules.json",
+                    opener=_OkOpener(b'{"categories": [{"key": "app_demo", "kind": "files", "paths": ["%TEMP%\\\\Cache"]}]}'),
+                )
+            self.assertNotEqual(added, 1)
+            with open(path, encoding="utf-8") as handle:
+                self.assertIn("old", handle.read())
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_privacy_count_without_action_is_not_selectable(self):
+        record = {"id": "risk_money", "action": "files", "count": 4, "files": []}
+        self.assertFalse(privacy.is_selectable(record))
+        shop = {"id": "shop", "action": "sql", "count": 2, "files": [], "sql_jobs": [{"path": "h"}]}
+        self.assertTrue(privacy.is_selectable(shop))
+
+
+class _OkOpener:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def open(self, url, timeout=15):
+        payload = self.payload
+
+        class Resp:
+            def read(self, n):
+                return payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        return Resp()
+
+
 class FragVizTests(unittest.TestCase):
     def test_grid_follows_real_percentage(self):
         text = """
