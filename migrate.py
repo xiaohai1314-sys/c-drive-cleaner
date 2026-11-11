@@ -308,6 +308,7 @@ def _survivor_still(path: str, snap, expected) -> bool:
 
 
 def _tree_still_verified(root: str, marks: dict, snaps: dict) -> bool:
+    """检查目录文件集和内容；Windows 不复用元数据快照，逐个核对摘要。"""
     if not root or os.path.islink(root) or not os.path.isdir(root):
         return False
     base = os.path.abspath(root)
@@ -316,6 +317,8 @@ def _tree_still_verified(root: str, marks: dict, snaps: dict) -> bool:
         try:
             info = os.lstat(entry.path)
         except OSError:
+            return False
+        if not stat.S_ISREG(info.st_mode) or safepath.is_reparse_point(entry.path):
             return False
         current[os.path.relpath(entry.path, base)] = info
     if set(current) != set(marks):
@@ -1032,7 +1035,9 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
             return MigrateResult(src, dest, status="partial", backup=dest, remaining=remaining)
         raise MigrateError(f"复制校验失败（robocopy 返回 {rc}），源目录保持原样")
 
-    if not _tree_metadata_still(src, source_sizes, src_snaps):
+    if (not _tree_metadata_still(src, source_sizes, src_snaps)
+            or (os.name == "nt"
+                and not _tree_still_verified(src, dest_marks, src_snaps))):
         raise MigrateError("源目录在复制后发生变化，源文件和目标副本都已保留")
     fresh_manifest = {}
     for rel, size in source_sizes.items():

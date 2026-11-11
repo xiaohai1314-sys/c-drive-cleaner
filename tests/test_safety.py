@@ -1932,6 +1932,56 @@ class HashBudgetTests(unittest.TestCase):
 
 
 class WindowsSnapshotTests(unittest.TestCase):
+    def test_directory_migrate_rejects_same_size_source_change_with_restored_mtime(self):
+        src = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp()
+        source_file = os.path.join(src, "item.bin")
+        dest_file = os.path.join(dest_root, os.path.basename(src), "item.bin")
+        backup = src.rstrip("\\/") + ".migrate-bak"
+        try:
+            with open(source_file, "wb") as handle:
+                handle.write(b"known-good")
+
+            def drive(path):
+                full = os.path.abspath(path)
+                root = os.path.abspath(dest_root)
+                return "D:" if full == root or full.startswith(root + os.sep) else "C:"
+
+            def robocopy(source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                shutil.copy2(os.path.join(source, "item.bin"),
+                             os.path.join(dest, "item.bin"))
+                before = os.stat(source_file)
+                with open(source_file, "wb") as handle:
+                    handle.write(b"changed!!!")
+                os.utime(source_file, ns=(before.st_atime_ns, before.st_mtime_ns))
+                return 0
+
+            def link(link_path, target):
+                os.symlink(target, link_path, target_is_directory=True)
+
+            with mock.patch.object(migrate.os, "name", "nt"), \
+                    mock.patch.object(migrate, "_drive_of", side_effect=drive), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
+                    mock.patch.object(migrate, "is_junction", return_value=False), \
+                    mock.patch.object(migrate, "create_junction", side_effect=link), \
+                    mock.patch.object(migrate.safepath, "is_reparse_point", return_value=False):
+                with self.assertRaisesRegex(migrate.MigrateError, "源目录在复制后发生变化"):
+                    migrate.migrate(src, dest_root)
+
+            with open(source_file, "rb") as handle:
+                self.assertEqual(handle.read(), b"changed!!!")
+            with open(dest_file, "rb") as handle:
+                self.assertEqual(handle.read(), b"known-good")
+            self.assertFalse(os.path.lexists(backup))
+        finally:
+            if os.path.islink(src):
+                os.unlink(src)
+            else:
+                shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+            shutil.rmtree(backup, ignore_errors=True)
+
     def test_same_size_content_change_with_restored_mtime_rehashes_survivor(self):
         folder = tempfile.mkdtemp()
         try:
