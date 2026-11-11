@@ -169,16 +169,74 @@ def _remove_empty_dirs(root):
             pass
 
 
+def _shred_directory(path, passes=1):
+    """粉碎目录中的普通文件；逐项返回真实失败，不跟随链接。"""
+    success_paths = []
+    failures = []
+    for entry in utils.walk_files(path):
+        try:
+            assert_shreddable(entry.path)
+            shred_file(entry.path, passes)
+            success_paths.append(entry.path)
+        except Exception as exc:
+            failures.append({"path": entry.path, "status": "failed", "error": str(exc)})
+
+    _remove_empty_dirs(path)
+    root_removed = False
+    if not failures:
+        try:
+            os.rmdir(path)
+            root_removed = True
+        except OSError as exc:
+            failures.append({"path": path, "status": "failed", "error": str(exc)})
+    return success_paths, failures, root_removed
+
+
 def run_batch(paths, shred_fn=None):
-    """逐个粉碎。失败记为 failed，不会当成已完成。"""
-    shred_fn = shred_fn or shred_path
+    """粉碎路径并保留目录内逐文件结果，失败不会被吞掉或算作成功。"""
     records = []
     for path in paths or []:
+        if shred_fn is None and os.path.isdir(path) and not os.path.islink(path):
+            try:
+                assert_shreddable(path)
+                success_paths, failures, root_removed = _shred_directory(path)
+                status = "ok" if not failures else ("partial" if success_paths else "failed")
+                records.append({
+                    "path": path,
+                    "status": status,
+                    "files_ok": len(success_paths),
+                    "files_failed": len(failures),
+                    "success_paths": success_paths,
+                    "failures": failures,
+                    "finished": root_removed and not failures,
+                })
+            except Exception as exc:
+                records.append({
+                    "path": path, "status": "failed", "files_ok": 0,
+                    "files_failed": 1, "success_paths": [],
+                    "failures": [{"path": path, "status": "failed", "error": str(exc)}],
+                    "finished": False,
+                })
+            continue
+
         try:
-            shred_fn(path)
-            records.append({"path": path, "status": "ok"})
+            if shred_fn is None:
+                result = shred_path(path)
+            else:
+                result = shred_fn(path)
+            count = result if isinstance(result, int) else 1
+            records.append({
+                "path": path, "status": "ok", "files_ok": max(count, 1),
+                "files_failed": 0, "success_paths": [path], "failures": [],
+                "finished": True,
+            })
         except Exception as exc:
-            records.append({"path": path, "status": "failed", "error": str(exc)})
+            failure = {"path": path, "status": "failed", "error": str(exc)}
+            records.append({
+                "path": path, "status": "failed", "files_ok": 0,
+                "files_failed": 1, "success_paths": [], "failures": [failure],
+                "finished": False, "error": str(exc),
+            })
     return records
 
 
@@ -189,17 +247,13 @@ def shred_path(path, passes=1, log=lambda _message: None):
         log(path)
         return 1
     if os.path.isdir(path):
-        count = 0
-        for entry in utils.walk_files(path):
-            try:
-                shred_file(entry.path, passes)
-                count += 1
-            except OSError:
-                pass
-        _remove_empty_dirs(path)
-        try:
-            os.rmdir(path)
-        except OSError:
-            pass
-        return count
+        success_paths, failures, _root_removed = _shred_directory(path, passes)
+        for done_path in success_paths:
+            log(done_path)
+        if failures:
+            detail = "; ".join(
+                f"{item.get('path')}: {item.get('error', '粉碎失败')}"
+                for item in failures[:5])
+            raise ShredError(f"目录内有 {len(failures)} 项未能粉碎：{detail}")
+        return len(success_paths)
     return 0

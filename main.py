@@ -84,6 +84,21 @@ ICON_COLORS = ["#2f80ed", "#16a085", "#8e44ad", "#e67e22", "#4b6cb7",
                "#c0392b", "#27ae60"]
 
 
+def _shred_media_warning(media_types):
+    solid = sorted(drive for drive, is_ssd in (media_types or {}).items() if is_ssd is True)
+    unknown = sorted(drive for drive, is_ssd in (media_types or {}).items() if is_ssd is None)
+    lines = []
+    if solid:
+        lines.append(
+            "注意：" + "、".join(solid) +
+            " 是固态硬盘。覆盖写入不能保证原数据被擦掉；请勿把粉碎视为 SSD 的可靠擦除。")
+    if unknown:
+        lines.append(
+            "无法确认 " + "、".join(unknown) +
+            " 的介质类型。覆盖写入不能保证原数据不可恢复，尤其是 SSD/闪存。")
+    return "\n\n" + "\n".join(lines) if lines else ""
+
+
 def _round_rect(canvas, x1, y1, x2, y2, r, **kwargs):
     points = [x1 + r, y1, x1 + r, y1, x2 - r, y1, x2 - r, y1, x2, y1,
               x2, y1 + r, x2, y1 + r, x2, y2 - r, x2, y2 - r, x2, y2,
@@ -233,6 +248,7 @@ class App(_TkRoot):
         self.privacy_mode = "progress"
         self.privacy_step = ""
         self.privacy_done_steps = 0
+        self.privacy_scan_error = ""
         self._privacy_running = False
         self.bigmove_rows = []
         self.bigmove_checked = set()
@@ -739,7 +755,11 @@ class App(_TkRoot):
         qq_total = self._im_total("qq")
         big_total = sum(row[1] for row in self.big_rows)
         dup_total = sum(g["size"] * max(len(g["files"]) - 1, 0) for g in self.dup_groups)
-        privacy_count = sum(int(item.get("count") or 0) for item in self.privacy_records)
+        available_privacy = [item for item in self.privacy_records
+                             if item.get("count_available", True)]
+        privacy_count = sum(int(item.get("count") or 0) for item in available_privacy)
+        privacy_unknown = any(not item.get("count_available", True)
+                              for item in self.privacy_records)
         frag_count = (self.frag_analysis or {}).get("count") or 0
 
         def text(value):
@@ -748,7 +768,9 @@ class App(_TkRoot):
         mapping = {
             "clean": text(clean_total),
             "frag": f"[{frag_count}]" if frag_count else "",
-            "privacy": f"[{privacy_count}]" if privacy_count else text(privacy_total),
+            "privacy": (f"[{privacy_count}+]" if privacy_count and privacy_unknown
+                        else f"[{privacy_count}]" if privacy_count
+                        else "[?]" if privacy_unknown else text(privacy_total)),
             "big": text(big_total), "dup": text(dup_total),
             "wechat": text(wechat_total), "qq": text(qq_total), "shred": "",
         }
@@ -951,6 +973,7 @@ class App(_TkRoot):
         self._privacy_running = True
         self.privacy_mode = "progress"
         self.privacy_records = []
+        self.privacy_scan_error = ""
         self.privacy_step = "准备扫描"
         self._render_privacy()
 
@@ -958,12 +981,14 @@ class App(_TkRoot):
             def progress(name, partial):
                 self.queue.put(("privacy_progress", name, partial))
 
+            error = ""
             try:
                 records = privacy.scan(progress)
-            except Exception:
+            except Exception as exc:
                 records = []
+                error = str(exc) or exc.__class__.__name__
             self._privacy_running = False
-            self.queue.put(("privacy_scan_done", records))
+            self.queue.put(("privacy_scan_done", records, error))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -995,13 +1020,20 @@ class App(_TkRoot):
         info = tk.Frame(row, bg=WHITE)
         info.pack(side="left", fill="both", expand=True, padx=10)
         for key, title, _note in privacy.SECTIONS:
-            count = sum(int(item.get("count") or 0) for item in self.privacy_records
-                        if item.get("section") == key)
+            items = [item for item in self.privacy_records if item.get("section") == key]
+            count = sum(int(item.get("count") or 0) for item in items
+                        if item.get("count_available", True))
+            unavailable = any(not item.get("count_available", True) for item in items)
             line = tk.Frame(info, bg=WHITE)
             line.pack(fill="x", pady=4)
             tk.Label(line, text=title, bg=WHITE, fg=TEXT,
                      font=("Microsoft YaHei UI", 10)).pack(side="left")
-            shown = f"{count} 条" if key in seen else "等待扫描"
+            if key not in seen:
+                shown = "等待扫描"
+            elif unavailable:
+                shown = f"已识别 {count} 条，部分不可用" if count else "数据源不可用"
+            else:
+                shown = f"{count} 条"
             tk.Label(line, text=shown, bg=WHITE, fg=ORANGE if key in seen else MUTED,
                      font=("Microsoft YaHei UI", 10, "bold")).pack(side="right")
         scanning = self.privacy_step or "准备扫描"
@@ -1009,26 +1041,53 @@ class App(_TkRoot):
                  font=("Microsoft YaHei UI", 10)).pack(anchor="w", pady=(16, 0))
 
     def _render_privacy_result(self, body):
-        total = sum(int(item.get("count") or 0) for item in self.privacy_records)
+        total = sum(int(item.get("count") or 0) for item in self.privacy_records
+                    if item.get("count_available", True))
+        unavailable = sum(1 for item in self.privacy_records
+                          if not item.get("count_available", True))
         chosen = sum(int(item.get("count") or 0) for item in self.privacy_records
-                     if item.get("id") in self.privacy_selected)
+                     if item.get("id") in self.privacy_selected
+                     and item.get("count_available", True))
         if getattr(self, "privacy_head", None):
             for child in self.privacy_head.winfo_children():
                 child.destroy()
             left = tk.Frame(self.privacy_head, bg=PAGE)
             left.pack(side="left", fill="x", expand=True)
-            self._headline(left, [
-                (str(total), RED, True, 28), (" 条隐私记录", TEXT, True, 18),
-            ]).pack(anchor="w")
+            if self.privacy_scan_error:
+                headline = [("扫描失败", RED, True, 28), (" 无法确认隐私记录", TEXT, True, 18)]
+            elif unavailable and not total:
+                headline = [("—", RED, True, 28), (f" {unavailable} 个数据源不可用", TEXT, True, 18)]
+            elif unavailable:
+                headline = [(str(total), RED, True, 28),
+                            (f" 条可识别记录，另有 {unavailable} 个源不可用", TEXT, True, 18)]
+            else:
+                headline = [(str(total), RED, True, 28), (" 条隐私记录", TEXT, True, 18)]
+            self._headline(left, headline).pack(anchor="w")
             GreenButton(self.privacy_head, "一键清理", self._privacy_clean).pack(side="right")
         if getattr(self, "privacy_sub", None):
-            self.privacy_sub.configure(text=f"已选择 {chosen} 条隐私，清理后防止泄露您的小秘密。已保存的密码不会删除。")
+            suffix = f"另有 {unavailable} 个数据源不可用。" if unavailable else ""
+            if self.privacy_scan_error:
+                suffix = "扫描未完成，无法确认数据源状态。"
+            self.privacy_sub.configure(
+                text=f"已选择 {chosen} 条可识别记录。{suffix}已保存的密码不会删除。")
+        if self.privacy_scan_error and not self.privacy_records:
+            tk.Label(body, text=f"隐私扫描失败：{self.privacy_scan_error}",
+                     bg=WHITE, fg=RED, font=look.tk_font(10), wraplength=640,
+                     justify="left").pack(anchor="w", padx=20, pady=20)
         for key, title, note in privacy.SECTIONS:
             items = [item for item in self.privacy_records if item.get("section") == key]
             if not items:
                 continue
-            section_count = sum(int(item.get("count") or 0) for item in items)
-            self._section_title(body, f"{title}（共{section_count}条）", note)
+            section_count = sum(int(item.get("count") or 0) for item in items
+                                if item.get("count_available", True))
+            section_unavailable = any(not item.get("count_available", True) for item in items)
+            if section_unavailable and not section_count:
+                section_label = "数据源不可用"
+            elif section_unavailable:
+                section_label = f"已识别{section_count}条，部分不可用"
+            else:
+                section_label = f"共{section_count}条"
+            self._section_title(body, f"{title}（{section_label}）", note)
             grid = tk.Frame(body, bg=WHITE)
             grid.pack(fill="x", padx=14, pady=(2, 8))
             cards = [self._privacy_card(grid, item, index) for index, item in enumerate(items)]
@@ -1053,7 +1112,10 @@ class App(_TkRoot):
         tk.Label(card, text=item.get("name", ""), bg=WHITE, fg=TEXT,
                  font=look.tk_font(9), wraplength=92, justify="center").pack(pady=(4, 0))
         count = int(item.get("count") or 0)
-        Pill(card, f"{count} 条", ORANGE if count else GREEN).pack(pady=(2, 4))
+        if not item.get("count_available", True):
+            Pill(card, "不可用", ORANGE).pack(pady=(2, 4))
+        else:
+            Pill(card, f"{count} 条", ORANGE if count else GREEN).pack(pady=(2, 4))
         return card
 
     def _toggle_privacy(self, key, value):
@@ -1062,12 +1124,17 @@ class App(_TkRoot):
         else:
             self.privacy_selected.discard(key)
         if self.privacy_mode == "result":
-            total = sum(int(item.get("count") or 0) for item in self.privacy_records)
+            total = sum(int(item.get("count") or 0) for item in self.privacy_records
+                        if item.get("count_available", True))
             chosen = sum(int(item.get("count") or 0) for item in self.privacy_records
-                         if item.get("id") in self.privacy_selected)
+                         if item.get("id") in self.privacy_selected
+                         and item.get("count_available", True))
             if getattr(self, "privacy_sub", None):
+                unavailable = sum(1 for item in self.privacy_records
+                                  if not item.get("count_available", True))
+                suffix = f"；另有 {unavailable} 个数据源不可用" if unavailable else ""
                 self.privacy_sub.configure(
-                    text=f"共 {total} 条隐私记录，已选择 {chosen} 条。已保存的密码不会删除。")
+                    text=f"共 {total} 条可识别记录，已选择 {chosen} 条{suffix}。已保存的密码不会删除。")
 
     def _privacy_clean(self):
         if self._cleaning or self._privacy_running:
@@ -1088,10 +1155,14 @@ class App(_TkRoot):
         def work():
             try:
                 result = privacy.apply_plan(plan)
-            except Exception:
-                result = {"files": 0, "sql": 0, "registry": 0, "failed": []}
+            except Exception as exc:
+                result = {
+                    "files": 0, "sql": 0, "registry": 0,
+                    "failed": [f"隐私清理异常：{exc}"],
+                }
             lines = ["开始清理", "清理：隐私痕迹",
                      f"清理结束，共释放 {result.get('files', 0)} 个文件"]
+            lines.extend(f"清理失败：{item}" for item in result.get("failed") or [])
             self._write_clean_log(lines)
             self._cleaning = False
             self.queue.put(("privacy_cleaned", result))
@@ -1273,7 +1344,6 @@ class App(_TkRoot):
             return size
 
         visible.sort(key=sort_value, reverse=self.big_sort_desc)
-        self.big_checked &= {item[0] for item in visible}
         table_rows = []
         for path, size, mtime in visible:
             table_rows.append({
@@ -1304,8 +1374,8 @@ class App(_TkRoot):
             return
         disk = self.big_disk_filter.get() if getattr(self, "big_disk_filter", None) else "全部"
         visible = set(scanner.visible_large_paths(self.big_rows, self.big_type, disk))
-        self.big_checked &= visible
-        paths = [path for path in self.big_checked if not safepath.is_protected_path(path)]
+        paths = [path for path in self.big_checked if path in visible
+                 and not safepath.is_protected_path(path)]
         if not paths:
             messagebox.showinfo("提示", "请先勾选要清理的大文件。系统文件不会被勾选删除。")
             return
@@ -1314,32 +1384,38 @@ class App(_TkRoot):
         self._cleaning = True
         threading.Thread(target=self._recycle_worker, args=(paths, "大文件"), daemon=True).start()
 
-    def _recycle_worker(self, paths, title):
-        known = 0
+    def _recycle_worker(self, paths, title, expected_groups=None):
+        known_sizes = {}
+        failed = set()
+        eligible = []
         for path in paths:
+            if not os.path.lexists(path):
+                failed.add(path)
+                continue
+            if expected_groups is not None:
+                group = expected_groups.get(path)
+                if group is None or not dupes.verify_duplicate_candidate(path, group):
+                    failed.add(path)
+                    continue
             try:
-                known += os.path.getsize(path)
+                known_sizes[path] = os.path.getsize(path)
             except OSError:
-                pass
-        failed = set(recyclebin.send_to_recycle(paths))
-        done = [path for path in paths if path not in failed and not os.path.exists(path)]
-        freed = 0
-        for path in done:
-            freed += 0
-        # 送进回收站后原路径已经不在，大小用删除前统计里仍存在的失败项扣掉。
-        failed_size = 0
-        for path in failed:
-            try:
-                failed_size += os.path.getsize(path)
-            except OSError:
-                pass
-        freed = max(known - failed_size, 0)
+                known_sizes[path] = 0
+            eligible.append(path)
+        try:
+            failed.update(recyclebin.send_to_recycle(eligible))
+        except Exception:
+            failed.update(eligible)
+        done = [path for path in eligible if path not in failed and not os.path.lexists(path)]
+        failed.update(path for path in eligible if os.path.lexists(path))
+        freed = sum(known_sizes.get(path, 0) for path in done)
         self._write_clean_log([
             "开始清理", f"清理：{title}",
             f"清理结束，共释放 {utils.fmt_size(freed)}",
         ])
         self._cleaning = False
-        self.queue.put(("recycled", title, len(done), len(failed), freed))
+        self.queue.put(("recycled", title, len(done), len(failed), freed,
+                        list(done), sorted(failed)))
 
     # ---------- 页面：大文件搬家 ----------
     def _page_bigmove(self, parent):
@@ -1598,20 +1674,16 @@ class App(_TkRoot):
         return filetypes.kind_of(files[0])
 
     def _toggle_dup_path(self, path, checked):
+        for group in self.dup_groups:
+            if path in (group.get("files") or []) and path == dupes.pick_keeper(group):
+                self.dup_checked.discard(path)
+                self.after(1, self._render_dup)
+                return
         if checked:
             self.dup_checked.add(path)
         else:
             self.dup_checked.discard(path)
-        changed = False
-        for group in self.dup_groups:
-            files = list(group.get("files") or [])
-            if path in files and files and all(one in self.dup_checked for one in files):
-                self.dup_checked.discard(dupes.pick_keeper(group))
-                changed = True
-        if changed:
-            self.after(1, self._render_dup)
-        else:
-            self._refresh_dup_head()
+        self._refresh_dup_head()
 
     def _render_dup(self):
         table = getattr(self, "dup_table", None)
@@ -1626,11 +1698,9 @@ class App(_TkRoot):
             shown.append(group)
             visible_paths.update(group.get("files") or [])
         self.dup_checked &= visible_paths
-        if self.dup_sort_key == "mtime":
-            shown.sort(key=lambda group: max((group.get("mtimes") or {}).values() or [0]),
-                       reverse=self.dup_sort_desc)
-        else:
-            shown.sort(key=lambda group: group.get("size") or 0, reverse=self.dup_sort_desc)
+        keepers = {dupes.pick_keeper(group) for group in self.dup_groups}
+        self.dup_checked.difference_update(keepers)
+        shown = dupes.sort_duplicate_groups(shown, self.dup_sort_key, self.dup_sort_desc)
         rows = []
         for group_index, group in enumerate(shown):
             tint = "#e7f3ff" if group_index % 2 == 0 else "#fff6e8"
@@ -1645,7 +1715,7 @@ class App(_TkRoot):
                     "name": path,
                     "bg": tint,
                     "group_end": position == len(files) - 1,
-                    "badge": "保留" if path == keeper and path not in self.dup_checked else "",
+                    "badge": "保留" if path == keeper else "",
                     "cells": [(utils.fmt_size(group.get("size") or 0), 110),
                               (self._fmt_time(mtime), 140)],
                 })
@@ -1686,8 +1756,13 @@ class App(_TkRoot):
         if not self._confirm_paths(paths, "确认清理重复文件",
                                    "每组都会保留至少一份。" + recyclebin.describe()):
             return
+        expected_groups = {
+            path: group for group in self.dup_groups
+            for path in group.get("files") or [] if path in paths
+        }
         self._cleaning = True
-        threading.Thread(target=self._recycle_worker, args=(paths, "重复文件"), daemon=True).start()
+        threading.Thread(target=self._recycle_worker,
+                         args=(paths, "重复文件", expected_groups), daemon=True).start()
 
     # ---------- 页面：微信 / QQ 专清 ----------
     def _page_wechat(self, parent):
@@ -2043,16 +2118,16 @@ class App(_TkRoot):
         if not table:
             return
         rows = []
-        for index, item in enumerate(self.shred_items):
+        for item in self.shred_items:
             path = item["path"]
             rows.append({
-                "id": index,
+                "id": path,
                 "checked": item.get("checked", True),
                 "icon": self._kind_icon(path),
                 "name": os.path.basename(path.rstrip("\\/")) or path,
                 "cells": [(look.ellipsize_middle(os.path.dirname(path), 290), 300),
                           (self._fmt_time(item.get("mtime")), 130),
-                          ("移除", 60, lambda i=index: self._remove_shred(i))],
+                          ("移除", 60, lambda p=path: self._remove_shred(p))],
             })
         table.set_rows(rows)
         self.shred_all.set(bool(self.shred_items) and all(item.get("checked", True) for item in self.shred_items))
@@ -2063,9 +2138,14 @@ class App(_TkRoot):
                 self.shred_empty.place(relx=0.5, rely=0.5, anchor="center")
                 self.shred_empty.lift()
 
-    def _toggle_shred(self, index, checked):
-        if 0 <= index < len(self.shred_items):
-            self.shred_items[index]["checked"] = checked
+    def _toggle_shred(self, path, checked):
+        if not isinstance(path, (str, os.PathLike)):
+            return
+        path = os.fspath(path)
+        for item in self.shred_items:
+            if item.get("path") == path:
+                item["checked"] = checked
+                break
         self.shred_all.set(bool(self.shred_items) and all(item.get("checked", True) for item in self.shred_items))
 
     def _toggle_shred_all(self):
@@ -2074,9 +2154,11 @@ class App(_TkRoot):
             item["checked"] = value
         self._render_shred()
 
-    def _remove_shred(self, index):
-        if 0 <= index < len(self.shred_items):
-            del self.shred_items[index]
+    def _remove_shred(self, path):
+        if not isinstance(path, (str, os.PathLike)):
+            return
+        path = os.fspath(path)
+        self.shred_items = [item for item in self.shred_items if item.get("path") != path]
         self.after(1, self._render_shred)
 
     def _shred_add_paths(self, paths):
@@ -2120,11 +2202,18 @@ class App(_TkRoot):
             messagebox.showerror("无法粉碎", "列表中含有系统路径，已拒绝：\n" + "\n".join(blocked[:8]))
             return
         note = "将覆盖写入后永久删除，不能从回收站恢复。"
-        ssd = sorted({self._disk_of(path).upper() for path in paths
-                      if self._disk_of(path) and utils.is_ssd(self._disk_of(path))})
-        if ssd:
-            note += ("\n\n注意：" + "、".join(ssd) + " 是固态硬盘。固态盘会把写入挪到别的闪存块，"
-                     "覆盖写入不能保证原数据被擦掉；要更稳妥，请对整盘开启 BitLocker 加密。")
+        media_types = {}
+        for path in paths:
+            drive = self._disk_of(path)
+            if not drive:
+                continue
+            drive = drive.upper()
+            if drive not in media_types:
+                try:
+                    media_types[drive] = utils.is_ssd(drive)
+                except Exception:
+                    media_types[drive] = None
+        note += _shred_media_warning(media_types)
         if not self._confirm_paths(paths, "确认粉碎", note):
             return
         self._cleaning = True
@@ -2136,10 +2225,20 @@ class App(_TkRoot):
             history.append_shred_history(LOG_DIR, records)
         except OSError:
             pass
-        done = [item["path"] for item in records if item.get("status") == "ok"]
-        failed = [item for item in records if item.get("status") != "ok"]
+        done = [item["path"] for item in records
+                if item.get("finished") or (item.get("status") == "ok" and "finished" not in item)]
+        count = sum(int(item.get("files_ok", 1 if item.get("status") == "ok" else 0) or 0)
+                    for item in records)
+        failed = []
+        for item in records:
+            details = item.get("failures") or []
+            if details:
+                failed.extend(details)
+            elif item.get("status") != "ok":
+                failed.append({"path": item.get("path", ""),
+                               "error": item.get("error") or "未能完成粉碎"})
         self._cleaning = False
-        self.queue.put(("shred_done", done, failed))
+        self.queue.put(("shred_done", done, count, failed))
 
     def _show_shred_history(self):
         rows = history.load_shred_history(LOG_DIR)
@@ -2239,19 +2338,30 @@ class App(_TkRoot):
         lines = ["开始清理"]
         freed = 0
         errors = []
+        skipped = pending = pending_size = 0
         for cat in chosen:
             try:
                 result = cleaner.clean_category(cat, log=lines.append)
                 freed += result.freed
                 errors.extend(result.errors)
-                lines.append(f"清理：{cat.name}")
+                skipped += result.skipped
+                pending += result.pending
+                pending_size += result.pending_size
+                if result.errors or result.skipped or result.pending:
+                    lines.append(f"未全部完成：{cat.name}")
+                else:
+                    lines.append(f"清理：{cat.name}")
             except Exception as exc:
                 errors.append(f"{cat.name}：{exc}")
                 lines.append(f"清理失败：{cat.name} {exc}")
+        if skipped:
+            lines.append(f"安全跳过 {skipped} 项")
+        if pending:
+            lines.append(f"待重启后删除 {pending} 项（{utils.fmt_size(pending_size)}）")
         lines.append(f"清理结束，共释放 {utils.fmt_size(freed)}")
         self._write_clean_log(lines)
         self._cleaning = False
-        self.queue.put(("clean_done", freed, errors))
+        self.queue.put(("clean_done", freed, errors, skipped, pending, pending_size))
 
     def _run_defrag(self):
         if self._cleaning:
@@ -2502,11 +2612,20 @@ class App(_TkRoot):
             self._draw_disk_bar()
             freed = message[1]
             errors = message[2] if len(message) > 2 else []
-            if errors:
+            skipped = int(message[3] or 0) if len(message) > 3 else 0
+            pending = int(message[4] or 0) if len(message) > 4 else 0
+            pending_size = int(message[5] or 0) if len(message) > 5 else 0
+            if errors or skipped or pending:
+                details = list(errors)
+                if skipped:
+                    details.append(f"安全策略跳过 {skipped} 项（未删除）")
+                if pending:
+                    details.append(
+                        f"待重启后删除 {pending} 项，约 {utils.fmt_size(pending_size)}（当前未计入释放空间）")
                 self._show_warning_panel(
                     "清理未全部完成",
-                    f"已释放 {utils.fmt_size(freed)}。以下项目未能安全删除：",
-                    "", errors, [])
+                    f"实际释放 {utils.fmt_size(freed)}。请查看未完成项：",
+                    "", details, [])
             else:
                 messagebox.showinfo("清理完成", f"本次释放 {utils.fmt_size(freed)}")
             self.start_scan()
@@ -2519,6 +2638,7 @@ class App(_TkRoot):
             self._big_running = False
             self.worker = None
             self.big_rows = message[2]
+            self.big_checked.intersection_update(path for path, _size, _mtime in self.big_rows)
             self._render_big()
             self._update_sidebar_sizes()
         elif kind == "dup_progress":
@@ -2535,21 +2655,38 @@ class App(_TkRoot):
             self._update_sidebar_sizes()
         elif kind == "defrag_done":
             self.worker = None
-            self._update_frag_stats()
-            messagebox.showinfo("完成", "磁盘优化已结束。")
+            ok = bool(message[1])
+            try:
+                self._update_frag_stats()
+            except Exception:
+                pass
+            if ok:
+                messagebox.showinfo("完成", "磁盘优化已结束。")
+            else:
+                if getattr(self, "frag_status", None):
+                    self.frag_status.configure(text="磁盘优化失败，系统未完成优化。")
+                messagebox.showerror("磁盘优化失败", "系统未完成磁盘优化，请检查权限或系统工具状态。")
         elif kind == "shred_done":
             self.worker = None
-            done = message[1]
-            paths = done if isinstance(done, (list, tuple)) else []
-            count = len(paths) if isinstance(done, (list, tuple)) else int(done or 0)
+            paths = message[1] if isinstance(message[1], (list, tuple)) else []
+            count = int(message[2] or 0) if len(message) > 2 else len(paths)
+            failures = message[3] if len(message) > 3 else []
             finished = set(paths)
             self.shred_items = [item for item in self.shred_items if item["path"] not in finished]
             self._render_shred()
-            messagebox.showinfo("完成", f"已粉碎 {count} 个文件。")
+            if failures:
+                details = [f"{item.get('path', '')}：{item.get('error', '粉碎失败')}"
+                           if isinstance(item, dict) else str(item) for item in failures]
+                self._show_warning_panel(
+                    "粉碎未全部完成", f"成功粉碎 {count} 个文件；失败 {len(failures)} 项。",
+                    "", details, [])
+            else:
+                messagebox.showinfo("完成", f"已粉碎 {count} 个文件。")
         elif kind == "recycled":
             _title, done, failed, freed = message[1], message[2], message[3], message[4]
-            self.big_checked.clear()
-            self.dup_checked.clear()
+            done_paths = set(message[5] if len(message) > 5 else [])
+            self.big_checked.difference_update(done_paths)
+            self.dup_checked.difference_update(done_paths)
             messagebox.showinfo("完成", f"{_title}：已移入回收站 {done} 个，失败 {failed} 个，约 {utils.fmt_size(freed)}。")
             if self.current_page == "big":
                 self.start_big_scan()
@@ -2578,18 +2715,23 @@ class App(_TkRoot):
             self._render_privacy()
         elif kind == "privacy_scan_done":
             self.privacy_records = message[1]
+            self.privacy_scan_error = message[2] if len(message) > 2 else ""
             self.privacy_mode = "result"
             self.privacy_selected = {
-                item["id"] for item in self.privacy_records if int(item.get("count") or 0) > 0
+                item["id"] for item in self.privacy_records
+                if item.get("count_available", True) and int(item.get("count") or 0) > 0
             }
             self._render_privacy()
             self._update_sidebar_sizes()
         elif kind == "privacy_cleaned":
             result = message[1]
-            messagebox.showinfo(
-                "清理完成",
-                f"移走 {result.get('files', 0)} 个文件，处理 {result.get('sql', 0)} 个数据库，"
-                f"清除 {result.get('registry', 0)} 条记录。")
+            summary = (f"移走 {result.get('files', 0)} 个文件，处理 {result.get('sql', 0)} 个数据库，"
+                       f"清除 {result.get('registry', 0)} 条记录。")
+            failures = result.get("failed") or []
+            if failures:
+                self._show_warning_panel("隐私清理未全部完成", summary, "", failures, [])
+            else:
+                messagebox.showinfo("清理完成", summary)
             self.privacy_records = []
             self.privacy_selected = set()
             self._start_privacy_scan()

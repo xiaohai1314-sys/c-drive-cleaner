@@ -137,5 +137,26 @@ def group_count(group_key):
     return sum(_count(t) for t in TARGETS if t["group"] == group_key)
 
 
+def group_count_status(group_key):
+    """返回该组记录数及是否至少成功读取一个目标键。"""
+    if winreg is None:
+        return 0, False
+    total = 0
+    available = False
+    for target in TARGETS:
+        if target["group"] != group_key:
+            continue
+        try:
+            with winreg.OpenKey(HKCU, target["path"], 0, winreg.KEY_READ) as key:
+                available = True
+                if target["mode"] == "values":
+                    total += _count_values(key)
+                else:
+                    total += _count_subkeys(key)
+        except OSError:
+            continue
+    return total, available
+
+
 def group_clean(group_key):
     return sum(_delete(t) for t in TARGETS if t["group"] == group_key)

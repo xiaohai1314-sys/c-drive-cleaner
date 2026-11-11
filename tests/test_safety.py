@@ -2312,3 +2312,306 @@ def test_privacy_finance_and_medical_cards_are_cleanable(tmp_path):
     assert left == ["https://example.org/"]
     ids = {item["id"] for item in privacy._scan_high([])}
     assert not ids & {"risk_adult", "risk_leak", "risk_other"}
+
+
+class ReportedRegressionTests(unittest.TestCase):
+    class _Var:
+        def __init__(self, value=None):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    class _Table:
+        def __init__(self):
+            self.rows = []
+
+        def set_sort(self, *_args):
+            pass
+
+        def set_rows(self, rows):
+            self.rows = list(rows)
+
+    class _Tabs:
+        def winfo_children(self):
+            return []
+
+    def test_keeper_is_never_in_delete_plan_even_when_selected_alone_or_with_all(self):
+        group = {
+            "hash": "same", "size": 1, "files": [r"C:\\a", r"C:\\b", r"C:\\c"],
+            "mtimes": {r"C:\\a": 1, r"C:\\b": 3, r"C:\\c": 2},
+        }
+        old = dupes.keep_rule()
+        try:
+            for rule in ("newest", "oldest", "shortest"):
+                dupes.set_keep_rule(rule)
+                keeper = dupes.pick_keeper(group)
+                self.assertEqual(dupes.paths_to_delete([group], [keeper]), [])
+                doomed = dupes.paths_to_delete([group], group["files"])
+                self.assertNotIn(keeper, doomed)
+                self.assertEqual(len(doomed), 2)
+        finally:
+            dupes.set_keep_rule(old)
+
+    def test_duplicate_name_sort_sorts_groups_and_members(self):
+        groups = [
+            {"size": 10, "files": [r"D:\\zeta.txt", r"C:\\alpha.txt"], "mtimes": {}},
+            {"size": 20, "files": [r"C:\\gamma.txt", r"D:\\beta.txt"], "mtimes": {}},
+        ]
+        ascending = dupes.sort_duplicate_groups(groups, "name", False)
+        basename = lambda path: path.replace("\\", "/").rsplit("/", 1)[-1]
+        self.assertEqual([basename(path) for path in ascending[0]["files"]],
+                         ["alpha.txt", "zeta.txt"])
+        self.assertEqual(basename(ascending[0]["files"][0]), "alpha.txt")
+        descending = dupes.sort_duplicate_groups(groups, "name", True)
+        self.assertEqual(basename(descending[0]["files"][0]), "zeta.txt")
+        self.assertEqual([basename(path) for path in descending[0]["files"]],
+                         ["zeta.txt", "alpha.txt"])
+
+    def test_duplicate_candidate_is_revalidated_against_hash_and_link_state(self):
+        folder = tempfile.mkdtemp()
+        try:
+            left = os.path.join(folder, "copy.bin")
+            right = os.path.join(folder, "same.bin")
+            content = b"same scanned contents"
+            for path in (left, right):
+                with open(path, "wb") as handle:
+                    handle.write(content)
+            group = {"hash": dupes._file_hash(left), "size": len(content),
+                     "files": [left, right], "identities": {}}
+            self.assertTrue(dupes.verify_duplicate_candidate(left, group))
+            with open(left, "wb") as handle:
+                handle.write(b"other scanned contents")
+            self.assertFalse(dupes.verify_duplicate_candidate(left, group))
+            os.remove(left)
+            os.symlink(right, left)
+            self.assertFalse(dupes.verify_duplicate_candidate(left, group))
+            with open(right, "rb") as handle:
+                self.assertEqual(handle.read(), content)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_recycle_worker_rejects_changed_duplicate_before_recycle(self):
+        folder = tempfile.mkdtemp()
+        try:
+            path = os.path.join(folder, "copy.bin")
+            with open(path, "wb") as handle:
+                handle.write(b"original")
+            group = {"hash": dupes._file_hash(path), "size": 8,
+                     "files": [path], "identities": {}}
+            with open(path, "wb") as handle:
+                handle.write(b"modified")
+            app = main.App.__new__(main.App)
+            app.queue = __import__("queue").Queue()
+            app._write_clean_log = lambda _lines: None
+            app._cleaning = True
+            with mock.patch.object(main.recyclebin, "send_to_recycle") as send:
+                main.App._recycle_worker(app, [path], "重复文件", {path: group})
+            send.assert_called_once_with([])
+            self.assertTrue(os.path.isfile(path))
+            result = app.queue.get_nowait()
+            self.assertEqual(result[0], "recycled")
+            self.assertEqual(result[2], 0)
+            self.assertEqual(result[3], 1)
+            self.assertIn(path, result[6])
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_large_file_filter_switch_does_not_drop_hidden_selection(self):
+        app = main.App.__new__(main.App)
+        app.big_table = self._Table()
+        app.big_tabs = self._Tabs()
+        app.big_rows = [(r"C:\\clip.mp4", 10, 1), (r"D:\\archive.zip", 20, 2)]
+        app.big_checked = {r"C:\\clip.mp4", r"D:\\archive.zip"}
+        app.big_type = "video"
+        app.big_sort_key = "name"
+        app.big_sort_desc = False
+        app.big_disk_filter = self._Var("全部")
+        app._kind_tab = lambda *_args, **_kwargs: None
+        app._kind_icon = lambda _path: None
+        app._refresh_big_head = lambda _total: None
+        main.App._render_big(app)
+        self.assertEqual(app.big_checked, {r"C:\\clip.mp4", r"D:\\archive.zip"})
+        self.assertEqual([row["id"] for row in app.big_table.rows], [r"C:\\clip.mp4"])
+        self.assertTrue(app.big_table.rows[0]["checked"])
+        app.big_type = "archive"
+        main.App._render_big(app)
+        self.assertEqual([row["id"] for row in app.big_table.rows], [r"D:\\archive.zip"])
+        self.assertTrue(app.big_table.rows[0]["checked"])
+        self.assertEqual(app.big_checked, {r"C:\\clip.mp4", r"D:\\archive.zip"})
+
+    def test_duplicate_render_keeps_keeper_badge_and_unchecked(self):
+        group = {"hash": "x", "size": 4, "files": [r"C:\\z.txt", r"C:\\a.txt"],
+                 "mtimes": {r"C:\\z.txt": 1, r"C:\\a.txt": 9}}
+        keeper = dupes.pick_keeper(group)
+        app = main.App.__new__(main.App)
+        app.dup_table = self._Table()
+        app.dup_groups = [group]
+        app.dup_checked = {keeper}
+        app.dup_sort_key = "name"
+        app.dup_sort_desc = False
+        app._dup_kinds = lambda: set(main.DUP_KINDS)
+        app._kind_icon = lambda _path: None
+        app._fmt_time = lambda _stamp: ""
+        app._render_dup_tabs = lambda: None
+        app._refresh_dup_head = lambda: None
+        main.App._render_dup(app)
+        keeper_row = next(row for row in app.dup_table.rows if row["id"] == keeper)
+        self.assertFalse(keeper_row["checked"])
+        self.assertEqual(keeper_row["badge"], "保留")
+        self.assertEqual([row["id"].replace("\\", "/").rsplit("/", 1)[-1]
+                          for row in app.dup_table.rows],
+                         ["a.txt", "z.txt"])
+
+    def test_shred_table_uses_paths_as_ids_and_rejects_integer_callbacks(self):
+        first, second = r"C:\\one.bin", r"D:\\two.bin"
+        app = main.App.__new__(main.App)
+        app.shred_table = self._Table()
+        app.shred_empty = None
+        app.shred_items = [{"path": first, "mtime": 0, "checked": True},
+                           {"path": second, "mtime": 0, "checked": True}]
+        app.shred_all = self._Var(True)
+        app._fmt_time = lambda _stamp: ""
+        app._kind_icon = lambda _path: None
+        app.after = lambda *_args: None
+        main.App._render_shred(app)
+        self.assertEqual([row["id"] for row in app.shred_table.rows], [first, second])
+        main.App._toggle_shred(app, 0, False)
+        self.assertTrue(app.shred_items[0]["checked"])
+        main.App._toggle_shred(app, second, False)
+        self.assertFalse(app.shred_items[1]["checked"])
+        main.App._remove_shred(app, 0)
+        self.assertEqual(len(app.shred_items), 2)
+        main.App._remove_shred(app, first)
+        self.assertEqual([item["path"] for item in app.shred_items], [second])
+
+    def test_shred_directory_reports_single_file_failure_and_continues(self):
+        folder = tempfile.mkdtemp()
+        try:
+            names = ("first.bin", "failed.bin", "last.bin")
+            for name in names:
+                with open(os.path.join(folder, name), "wb") as handle:
+                    handle.write(name.encode())
+            attempted = []
+
+            def fake_shred(path, _passes=1):
+                attempted.append(os.path.basename(path))
+                if path.endswith("failed.bin"):
+                    raise OSError("denied")
+                os.remove(path)
+
+            with mock.patch.object(shredder, "shred_file", side_effect=fake_shred):
+                records = shredder.run_batch([folder])
+            self.assertEqual(set(attempted), set(names))
+            self.assertEqual(records[0]["status"], "partial")
+            self.assertEqual(records[0]["files_ok"], 2)
+            self.assertEqual(records[0]["files_failed"], 1)
+            self.assertEqual(records[0]["failures"][0]["path"], os.path.join(folder, "failed.bin"))
+            self.assertTrue(os.path.exists(os.path.join(folder, "failed.bin")))
+            self.assertFalse(os.path.exists(os.path.join(folder, "first.bin")))
+            self.assertFalse(os.path.exists(os.path.join(folder, "last.bin")))
+            history.append_shred_history(folder, records)
+            logged = history.load_shred_history(folder)
+            by_path = {row["path"]: row["status"] for row in logged}
+            self.assertEqual(by_path[os.path.join(folder, "failed.bin")], "failed")
+            self.assertEqual(by_path[os.path.join(folder, "first.bin")], "ok")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_ssd_and_unknown_shred_media_show_overwrite_risk(self):
+        self.assertIn("覆盖写入不能保证", main._shred_media_warning({"D:": True}))
+        unknown = main._shred_media_warning({"E:": None})
+        self.assertIn("无法确认", unknown)
+        self.assertIn("SSD/闪存", unknown)
+        self.assertEqual(main._shred_media_warning({"C:": False}), "")
+
+    def test_shred_partial_failure_is_shown_as_failure_result(self):
+        app = main.App.__new__(main.App)
+        app.worker = object()
+        app.shred_items = [{"path": "/tmp/folder", "checked": True}]
+        app._render_shred = lambda: None
+        app._show_warning_panel = mock.Mock()
+        with mock.patch.object(main.messagebox, "showinfo") as show_info:
+            main.App._handle(app, ("shred_done", [], 2, [
+                {"path": "/tmp/folder/failed.bin", "error": "denied"}
+            ]))
+        app._show_warning_panel.assert_called_once()
+        self.assertIn("failed.bin", str(app._show_warning_panel.call_args))
+        show_info.assert_not_called()
+
+    def test_privacy_unavailable_is_distinct_from_readable_empty_database(self):
+        folder = tempfile.mkdtemp()
+        try:
+            empty = os.path.join(folder, "empty.sqlite")
+            conn = sqlite3.connect(empty)
+            conn.execute("CREATE TABLE urls (id INTEGER PRIMARY KEY, url TEXT)")
+            conn.commit()
+            conn.close()
+            empty_stats = privacy.history_stats(empty)
+            self.assertTrue(empty_stats["urls_available"])
+            self.assertEqual(empty_stats["urls"], 0)
+
+            broken = os.path.join(folder, "broken.sqlite")
+            with open(broken, "wb") as handle:
+                handle.write(b"not a sqlite database")
+            broken_stats = privacy.history_stats(broken)
+            self.assertFalse(broken_stats["urls_available"])
+            self.assertEqual(broken_stats["urls"], 0)
+            self.assertFalse(privacy.is_selectable({
+                "id": "bad", "action": "sql", "sql_jobs": [{"path": broken}],
+                "count_available": False,
+            }))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_privacy_clean_failures_are_returned_for_file_and_sql_sources(self):
+        folder = tempfile.mkdtemp()
+        try:
+            path = os.path.join(folder, "History")
+            with open(path, "wb") as handle:
+                handle.write(b"keep until result")
+            sql_path = os.path.join(folder, "unreadable.sqlite")
+            plan = {"files": [path], "sql_jobs": [{"path": sql_path, "statements": ["DELETE FROM urls"]}],
+                    "groups": [], "extras": []}
+            with mock.patch.object(privacy, "apply_sql", return_value=False):
+                result = privacy.apply_plan(plan, remover=lambda paths: list(paths))
+            self.assertEqual(result["files"], 0)
+            self.assertTrue(any(path in item for item in result["failed"]))
+            self.assertTrue(any(sql_path in item for item in result["failed"]))
+            self.assertTrue(os.path.exists(path))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_defrag_and_clean_ui_do_not_report_success_on_failure_or_skip(self):
+        app = main.App.__new__(main.App)
+        app.worker = object()
+        app._update_frag_stats = lambda: None
+        app.frag_status = None
+        with mock.patch.object(main.messagebox, "showerror") as show_error, \
+                mock.patch.object(main.messagebox, "showinfo") as show_info:
+            main.App._handle(app, ("defrag_done", False))
+        show_error.assert_called_once()
+        show_info.assert_not_called()
+
+        app._draw_disk_bar = lambda: None
+        app._show_warning_panel = mock.Mock()
+        app.start_scan = lambda: None
+        main.App._handle(app, ("clean_done", 0, [], 1, 0, 0))
+        app._show_warning_panel.assert_called_once()
+
+    def test_privacy_clean_ui_shows_failed_result(self):
+        app = main.App.__new__(main.App)
+        app.worker = object()
+        app._show_warning_panel = mock.Mock()
+        app.privacy_records = []
+        app.privacy_selected = set()
+        app._start_privacy_scan = lambda: None
+        with mock.patch.object(main.messagebox, "showinfo") as show_info:
+            main.App._handle(app, ("privacy_cleaned", {
+                "files": 0, "sql": 0, "registry": 0, "failed": ["数据库读取失败"]
+            }))
+        app._show_warning_panel.assert_called_once()
+        show_info.assert_not_called()
