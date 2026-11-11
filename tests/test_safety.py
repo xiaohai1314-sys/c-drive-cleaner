@@ -1,4 +1,5 @@
 """纯逻辑安全测试。在 Linux 上用临时目录和假注册表运行，不碰真实系统。"""
+import contextlib
 import os
 import shutil
 import sqlite3
@@ -24,6 +25,21 @@ import ruleupdate
 import safepath
 import shredder
 
+
+
+
+def _win_before(module, attr, hook):
+    """Windows 按句柄删除，不经过 POSIX 的 dir_fd / _unlink_name_if_inode 钩子。
+    在 Windows 的删除入口前注入同样的竞态，让这些测试在两种平台上都验证真实路径。"""
+    if os.name != "nt":
+        return contextlib.nullcontext()
+    real = getattr(module, attr)
+
+    def wrapper(path, *args, **kwargs):
+        hook(str(path))
+        return real(path, *args, **kwargs)
+
+    return mock.patch.object(module, attr, side_effect=wrapper)
 
 class ImportSafetyTests(unittest.TestCase):
     def test_main_import_does_not_require_tkinter(self):
@@ -1091,7 +1107,13 @@ class FourthReviewTests(unittest.TestCase):
 
             cat = type("C", (), {"key": "t", "name": "t"})()
             result = cleaner.CleanResult(cat)
-            with mock.patch("safepath.os.open", side_effect=raced_open):
+            def win_swap(path):
+                if os.path.basename(path) == "victim.txt" and not os.path.islink(allowed):
+                    os.rename(allowed, allowed + ".moved")
+                    os.symlink(outside, allowed, target_is_directory=True)
+
+            with mock.patch("safepath.os.open", side_effect=raced_open), \
+                    _win_before(safepath, "_windows_unlink_noreparse", win_swap):
                 cleaner._delete_file(victim, [allowed], ("*",), result)
             moved = os.path.join(allowed + ".moved", "victim.txt")
             self.assertEqual(result.deleted, 0)
@@ -1271,9 +1293,16 @@ class FifthReviewTests(unittest.TestCase):
                         handle.write(b"APPENDED")
                 return real_open(path, flags, *args, **kwargs)
 
+            def win_append(path):
+                if os.path.basename(path) == os.path.basename(backup) and not did["n"]:
+                    did["n"] = 1
+                    with open(backup, "ab") as handle:
+                        handle.write(b"APPENDED")
+
             with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
                     mock.patch("safepath.os.open", side_effect=hooked_open), \
-                    mock.patch("migrate.os.open", side_effect=hooked_open):
+                    mock.patch("migrate.os.open", side_effect=hooked_open), \
+                    _win_before(migrate, "_verified_unlink_windows", win_append):
                 result = migrate.migrate_file(src, dest_root)
             self.assertTrue(os.path.isfile(backup))
             with open(backup, "rb") as handle:
@@ -1444,6 +1473,11 @@ class SixthReviewTests(unittest.TestCase):
                     plant()
                 return real_remove(path, *args, **kwargs)
 
+            def win_plant(path):
+                if victim["path"] and os.path.abspath(path).startswith(
+                        os.path.abspath(victim["path"]) + os.sep):
+                    plant()
+
             def hooked_open(path, flags, *args, **kwargs):
                 directory = bool(flags & getattr(os, "O_DIRECTORY", 0))
                 if (victim["path"] and not directory and kwargs.get("dir_fd") is not None
@@ -1458,7 +1492,9 @@ class SixthReviewTests(unittest.TestCase):
                     mock.patch.object(migrate, "junction_works", return_value=False), \
                     mock.patch.object(migrate, "is_junction", return_value=False), \
                     mock.patch("migrate.os.remove", side_effect=remove), \
-                    mock.patch("migrate.os.open", side_effect=hooked_open):
+                    mock.patch("migrate.os.open", side_effect=hooked_open), \
+                    _win_before(migrate, "_verified_unlink_windows", win_plant), \
+                    _win_before(safepath, "_windows_unlink_noreparse", win_plant):
                 try:
                     result = migrate.migrate(src, dest_root)
                 except migrate.MigrateError as exc:
@@ -1498,9 +1534,15 @@ class SixthReviewTests(unittest.TestCase):
                     plant()
                 return real_unlink_name(name, dirfd, expected, path, **kwargs)
 
+            def win_plant(path):
+                if os.path.abspath(path).startswith(os.path.abspath(dest) + os.sep):
+                    plant()
+
             with mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
                     mock.patch("migrate.safepath._unlink_name_if_inode",
-                               side_effect=hooked_unlink_name):
+                               side_effect=hooked_unlink_name), \
+                    _win_before(migrate, "_verified_unlink_windows", win_plant), \
+                    _win_before(safepath, "_windows_unlink_noreparse", win_plant):
                 try:
                     result = migrate._rollback_to_source(src, dest)
                 except migrate.MigrateError as exc:
@@ -1642,9 +1684,16 @@ class SeventhReviewTests(unittest.TestCase):
                         handle.write(b"APPENDED")
                 return real_unlink_name(name, dirfd, expected, path, **kwargs)
 
+            def win_append(path):
+                if os.path.abspath(path) == os.path.abspath(backup) and not did["n"]:
+                    did["n"] = 1
+                    with open(backup, "ab") as handle:
+                        handle.write(b"APPENDED")
+
             with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
                     mock.patch("migrate.safepath._unlink_name_if_inode",
-                               side_effect=hooked_unlink_name):
+                               side_effect=hooked_unlink_name), \
+                    _win_before(migrate, "_verified_unlink_windows", win_append):
                 result = migrate.migrate_file(src, dest_root)
             preserved = b""
             for path in (backup, backup + ".migrate-recovered"):
@@ -1701,12 +1750,19 @@ class SeventhReviewTests(unittest.TestCase):
                         handle.write(b"APPENDED")
                 return real_unlink_name(name, dirfd, expected, path, **kwargs)
 
+            def win_append(path):
+                if os.path.abspath(path) == os.path.abspath(target) and not did["n"]:
+                    did["n"] = 1
+                    with open(target, "ab") as handle:
+                        handle.write(b"APPENDED")
+
             with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
                     mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
                     mock.patch.object(migrate, "is_junction", return_value=False), \
                     mock.patch.object(migrate, "create_junction", side_effect=link), \
                     mock.patch("migrate.safepath._unlink_name_if_inode",
-                               side_effect=hooked_unlink_name):
+                               side_effect=hooked_unlink_name), \
+                    _win_before(migrate, "_verified_unlink_windows", win_append):
                 result = migrate.migrate(src, dest_root)
             preserved = b""
             for path in (target, target + ".migrate-recovered"):
@@ -2660,3 +2716,34 @@ class PR2FollowupTests(unittest.TestCase):
         assert "为安全已跳过：1 个" in text
         assert "移入回收站失败" in text
         assert "其他原因：1 个" in text and r"F:\z.bin" in text
+
+
+class ImcleanRootNameTests(unittest.TestCase):
+    def test_root_folder_named_like_media_does_not_classify_config(self):
+        base = tempfile.mkdtemp()
+        try:
+            root = os.path.join(base, "Video", "Temp", "WeChat Files")
+            os.makedirs(os.path.join(root, "msg", "image"))
+            config = os.path.join(root, "config.dat")
+            pic = os.path.join(root, "msg", "image", "a.dat")
+            for path in (config, pic):
+                with open(path, "wb") as handle:
+                    handle.write(b"1234")
+            self.assertEqual(imclean.classify(config, root)[0], None)
+            self.assertEqual(imclean.classify(pic, root)[0], "image")
+            kinds = {record["path"]: record["kind"] for record in imclean.list_media([root])}
+            self.assertNotIn(config, kinds)
+            self.assertEqual(kinds.get(pic), "image")
+
+            def remover(paths):
+                for path in paths:
+                    os.remove(path)
+                return []
+
+            _freed, deleted = imclean.clean([root], {"video", "image", "cache"},
+                                           paths=[config, pic], remover=remover)
+            self.assertTrue(os.path.exists(config))
+            self.assertFalse(os.path.exists(pic))
+            self.assertEqual(deleted, 1)
+        finally:
+            shutil.rmtree(base, ignore_errors=True)

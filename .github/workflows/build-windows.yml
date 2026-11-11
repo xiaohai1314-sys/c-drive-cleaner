@@ -24,8 +24,6 @@ jobs:
         run: python -m pip install --upgrade pip pyinstaller pillow
 
       - name: Tests
-        # Windows 上有 9 个迁移/竞态类测试未通过，先不阻塞出包，修好后去掉这行
-        continue-on-error: true
         shell: pwsh
         run: python -m unittest discover -s tests -v
 

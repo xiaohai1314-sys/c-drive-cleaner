@@ -109,9 +109,32 @@ def _dir_kind(dir_parts):
     return None
 
 
-def classify(path):
-    """返回 (kind, sub)。不能清理时 kind 为 None。"""
+def _relative_parts(path, root):
+    """只看根目录以下的路径段：根目录本身叫 Temp、Video 之类时不能影响分类。"""
     parts = _parts(path)
+    if root:
+        base = _parts(os.path.abspath(root))
+        full = _parts(os.path.abspath(path))
+        if len(full) > len(base) and full[:len(base)] == base:
+            return full[len(base):]
+    return parts
+
+
+def _root_of(path, roots):
+    """路径所在的最深一层根目录。"""
+    best = ""
+    for root in roots or []:
+        if root and utils.is_within(path, [root]) and len(root) > len(best):
+            best = root
+    return best
+
+
+def classify(path, root=None):
+    """返回 (kind, sub)。不能清理时 kind 为 None。
+
+    root 给出时只按 root 以下的目录段判断类型。
+    """
+    parts = _relative_parts(path, root)
     if not parts:
         return None, ""
     ext = os.path.splitext(parts[-1])[1]
@@ -145,8 +168,8 @@ def classify(path):
     return kind, sub
 
 
-def _entry_record(path, size, mtime):
-    kind, sub = classify(path)
+def _entry_record(path, size, mtime, root=None):
+    kind, sub = classify(path, root)
     if not kind:
         return None
     stamp = time.localtime(mtime or 0)
@@ -180,7 +203,7 @@ def list_media(roots, progress=None):
                 mtime = stat.st_mtime
             except OSError:
                 continue
-            record = _entry_record(entry.path, size, mtime)
+            record = _entry_record(entry.path, size, mtime, root)
             if record:
                 found.append(record)
     found.sort(key=lambda item: item["mtime"], reverse=True)
@@ -228,7 +251,8 @@ def clean(roots, kinds, paths=None, remover=None):
                 continue
             if safepath.is_password_store(path) or safepath.is_protected_path(path):
                 continue
-            kind, _sub = classify(path)
+            root = _root_of(path, roots)
+            kind, _sub = classify(path, root)
             if kind not in kinds:
                 continue
             try:
@@ -236,7 +260,7 @@ def clean(roots, kinds, paths=None, remover=None):
                 mtime = os.path.getmtime(path)
             except OSError:
                 continue
-            record = _entry_record(path, size, mtime)
+            record = _entry_record(path, size, mtime, root)
             if record and record["kind"] in kinds:
                 chosen.append(record)
     if not chosen:
