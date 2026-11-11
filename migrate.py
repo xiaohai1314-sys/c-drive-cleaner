@@ -150,8 +150,28 @@ def junction_works(link: str, target: str) -> bool:
     return os.path.exists(os.path.join(link, name))
 
 
-def _fingerprint(path: str):
-    """文件的 (大小, 摘要)。链接返回 None，避免把链接目标当成副本。"""
+# (dev, ino) -> 正常路径下对该 inode 做整文件读取的次数。
+_full_read_counts = {}
+
+
+def _note_full_read(info):
+    key = (int(getattr(info, "st_dev", 0) or 0), int(getattr(info, "st_ino", 0) or 0))
+    _full_read_counts[key] = _full_read_counts.get(key, 0) + 1
+
+
+def _identity_tuple(info):
+    """核对时刻的快照。Windows 用文件号、大小和最后写入时间。"""
+    mtime = getattr(info, "st_mtime_ns", int(info.st_mtime * 1_000_000_000))
+    if os.name == "nt":
+        return (int(getattr(info, "st_dev", 0) or 0),
+                int(getattr(info, "st_ino", 0) or 0),
+                int(info.st_size), mtime)
+    ctime = getattr(info, "st_ctime_ns", int(getattr(info, "st_ctime", 0) * 1_000_000_000))
+    return (int(info.st_dev), int(info.st_ino), int(info.st_size), mtime, ctime)
+
+
+def _fingerprint_with_snap(path: str):
+    """返回 (大小, 摘要, 快照)。读的过程中快照变了则返回 None。"""
     try:
         info = os.lstat(path)
     except OSError:
@@ -177,17 +197,83 @@ def _fingerprint(path: str):
                 break
             digest.update(block)
         after = os.fstat(fd)
-        if (after.st_dev != opened.st_dev or after.st_ino != opened.st_ino
-                or after.st_size != opened.st_size
-                or getattr(after, "st_mtime_ns", after.st_mtime)
-                != getattr(opened, "st_mtime_ns", opened.st_mtime)):
+        if _identity_tuple(after) != _identity_tuple(opened):
             return None
-        return (after.st_size, digest.hexdigest())
+        _note_full_read(after)
+        return (after.st_size, digest.hexdigest(), _identity_tuple(after))
     except OSError:
         return None
     finally:
         if fd is not None:
             os.close(fd)
+
+
+def _fingerprint(path: str):
+    """文件的 (大小, 摘要)。链接返回 None，避免把链接目标当成副本。"""
+    marked = _fingerprint_with_snap(path)
+    if marked is None:
+        return None
+    size, digest, _snap = marked
+    return (size, digest)
+
+
+def _inventory_verified(root: str):
+    """返回 (相对路径 -> (大小, 摘要), 相对路径 -> 核对时的快照)。"""
+    found = {}
+    snaps = {}
+    if not root or os.path.islink(root) or not os.path.isdir(root) or safepath.is_reparse_point(root):
+        return found, snaps
+    base = os.path.abspath(root)
+    for entry in utils.walk_files(base):
+        marked = _fingerprint_with_snap(entry.path)
+        if marked is None:
+            continue
+        size, digest, snap = marked
+        rel = os.path.relpath(entry.path, base)
+        found[rel] = (size, digest)
+        snaps[rel] = snap
+    return found, snaps
+
+
+def _survivor_still(path: str, snap, expected) -> bool:
+    """快照未变就信任已核对的摘要，变了才重新整文件哈希。"""
+    if snap is None:
+        return _fingerprint(path) == expected
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    if not stat.S_ISREG(info.st_mode) or safepath.is_reparse_point(path):
+        return False
+    if _identity_tuple(info) == snap:
+        return True
+    return _fingerprint(path) == expected
+
+
+def _tree_still_verified(root: str, marks: dict, snaps: dict) -> bool:
+    if not root or os.path.islink(root) or not os.path.isdir(root):
+        return False
+    base = os.path.abspath(root)
+    current = {}
+    for entry in utils.walk_files(base):
+        try:
+            info = os.lstat(entry.path)
+        except OSError:
+            return False
+        current[os.path.relpath(entry.path, base)] = info
+    if set(current) != set(marks):
+        return False
+    for rel, info in current.items():
+        snap = snaps.get(rel)
+        if snap is not None and _identity_tuple(info) == snap:
+            continue
+        if _fingerprint(entry_path(base, rel)) != marks.get(rel):
+            return False
+    return True
+
+
+def entry_path(base: str, rel: str) -> str:
+    return base if rel in (".", "") else os.path.join(base, rel)
 
 
 def _manifest(root: str) -> dict:
@@ -234,6 +320,81 @@ class MigrateResult:
         yield self.dest
 
 
+def _is_stray_dirname(name: str) -> bool:
+    return (name.startswith(".c-drive-cleaner-delete-")
+            or name.endswith(".migrate-bak"))
+
+
+def known_locations(environ=None):
+    """可能放过搬家备份的位置。不包含整块磁盘。"""
+    env = os.environ if environ is None else environ
+    roots = []
+    for key in ("USERPROFILE", "HOME"):
+        value = env.get(key)
+        if value and value not in roots:
+            roots.append(value)
+    return roots
+
+
+def find_stray_dirs(roots, max_depth=3):
+    """列出隔离目录和 .migrate-bak。只查找，不删除。"""
+    found = []
+    seen = set()
+    for root in roots or []:
+        if not root or not os.path.isdir(root) or os.path.islink(root):
+            continue
+        base = os.path.abspath(root)
+        base_depth = base.rstrip(os.sep).count(os.sep)
+        for dirpath, dirnames, _filenames in os.walk(base):
+            depth = dirpath.rstrip(os.sep).count(os.sep) - base_depth
+            if depth >= max_depth:
+                dirnames[:] = []
+                continue
+            kept = []
+            for name in dirnames:
+                path = os.path.join(dirpath, name)
+                if _is_stray_dirname(name):
+                    marker = os.path.abspath(path)
+                    if marker not in seen:
+                        seen.add(marker)
+                        found.append(path)
+                else:
+                    kept.append(name)
+            dirnames[:] = kept
+    return found
+
+
+def partial_report(backup="", remaining=(), quarantine=(), errors=()):
+    """把未完成的结果写成可读说明。"""
+    lines = []
+    if backup:
+        lines.append("备份位置：")
+        lines.append(str(backup))
+    if remaining:
+        lines.append("遗留路径：")
+        lines.extend(str(item) for item in remaining)
+    if quarantine:
+        lines.append("隔离目录（不会自动删除）：")
+        lines.extend(str(item) for item in quarantine)
+    if errors:
+        lines.append("未能安全删除：")
+        lines.extend(str(item) for item in errors)
+    return "\n".join(lines)
+
+
+def open_folder(path: str) -> bool:
+    """在资源管理器中打开目录。Windows 使用 os.startfile。"""
+    if not path:
+        return False
+    folder = path if os.path.isdir(path) else os.path.dirname(path)
+    if not folder or not os.path.isdir(folder):
+        return False
+    if os.name == "nt" and hasattr(os, "startfile"):
+        os.startfile(folder)  # noqa: windows-only
+        return True
+    return False
+
+
 def _hash_fd(fd) -> str:
     os.lseek(fd, 0, os.SEEK_SET)
     digest = hashlib.sha256()
@@ -242,7 +403,18 @@ def _hash_fd(fd) -> str:
         if not block:
             break
         digest.update(block)
+    _note_full_read(os.fstat(fd))
     return digest.hexdigest()
+
+
+def _fd_content_holds(fd, snap, expected_hash: str) -> bool:
+    """句柄上的快照没变就不再读一遍。变了才重算摘要。"""
+    latest = os.fstat(fd)
+    if _identity_tuple(latest) == snap:
+        return True
+    if _hash_fd(fd) != expected_hash:
+        return False
+    return _identity_tuple(os.fstat(fd)) == _identity_tuple(latest)
 
 
 def _open_parent_dirfd(parent: str):
@@ -367,9 +539,10 @@ def _verified_unlink(path: str, expected_size: int, expected_hash: str,
                 return False, ""
             if info.st_size != expected_size:
                 return False, ""
-            if _hash_fd(fd) != expected_hash:
-                return False, ""
+            digest = _hash_fd(fd)
             again = os.fstat(fd)
+            if _identity_tuple(again) != _identity_tuple(info) or digest != expected_hash:
+                return False, ""
             try:
                 named = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
             except OSError:
@@ -378,6 +551,7 @@ def _verified_unlink(path: str, expected_size: int, expected_hash: str,
                     or again.st_size != expected_size
                     or named.st_dev != info.st_dev or named.st_ino != info.st_ino):
                 return False, ""
+            fd_snap = _identity_tuple(again)
             if survivor_check is not None:
                 try:
                     if not survivor_check():
@@ -388,14 +562,7 @@ def _verified_unlink(path: str, expected_size: int, expected_hash: str,
             final_state = {}
 
             def validate_captured_file():
-                latest = os.fstat(fd)
-                latest_mtime = getattr(latest, "st_mtime_ns", latest.st_mtime)
-                again_mtime = getattr(again, "st_mtime_ns", again.st_mtime)
-                backup_changed = (
-                    latest.st_size != expected_size
-                    or latest_mtime != again_mtime
-                    or _hash_fd(fd) != expected_hash
-                )
+                backup_changed = not _fd_content_holds(fd, fd_snap, expected_hash)
                 survivor_ok = True
                 if survivor_check is not None:
                     try:
@@ -418,14 +585,8 @@ def _verified_unlink(path: str, expected_size: int, expected_hash: str,
                     detail += "；目标副本在删除窗口发生变化，备份已保留"
                 return False, detail
             post = os.fstat(fd)
-            pre_mtime = getattr(again, "st_mtime_ns", again.st_mtime)
-            post_mtime = getattr(post, "st_mtime_ns", post.st_mtime)
             swapped = post.st_nlink != 0
-            changed = (
-                post.st_size != again.st_size
-                or post_mtime != pre_mtime
-                or _hash_fd(fd) != expected_hash
-            )
+            changed = not _fd_content_holds(fd, fd_snap, expected_hash)
             survivor_ok = True
             if survivor_check is not None:
                 try:
@@ -611,7 +772,8 @@ def _list_remaining(root: str):
     return found
 
 
-def _release_manifest(backup: str, manifest: dict, survivor=None):
+def _release_manifest(backup: str, manifest: dict, survivor=None,
+                      survivor_snaps=None, survivor_marks=None):
     """只删除清单里、且句柄核对通过的文件。其余留下。"""
     notes = []
     for rel, mark in (manifest or {}).items():
@@ -619,8 +781,9 @@ def _release_manifest(backup: str, manifest: dict, survivor=None):
         survivor_check = None
         if survivor:
             survivor_path = os.path.join(survivor, rel)
-            expected = (size, digest)
-            survivor_check = lambda p=survivor_path, e=expected: _fingerprint(p) == e
+            expected = (survivor_marks or {}).get(rel, (size, digest))
+            snap = (survivor_snaps or {}).get(rel)
+            survivor_check = lambda p=survivor_path, s=snap, e=expected: _survivor_still(p, s, e)
         clean, detail = _verified_unlink(
             os.path.join(backup, rel), size, digest, survivor_check=survivor_check)
         if not clean and detail:
@@ -637,15 +800,9 @@ def _release_manifest(backup: str, manifest: dict, survivor=None):
 
 def file_inventory(root: str) -> dict:
     """root 下普通文件的相对路径指纹。不进入链接。"""
-    found = {}
-    if not root or not os.path.isdir(root) or safepath.is_reparse_point(root):
-        return found
-    base = os.path.abspath(root)
-    for entry in utils.walk_files(base):
-        mark = _fingerprint(entry.path)
-        if mark is None:
-            continue
-        found[os.path.relpath(entry.path, base)] = mark
+    found, snaps = _inventory_verified(root)
+    file_inventory.snaps = snaps
+    file_inventory.snaps_root = os.path.abspath(root) if root else ""
     return found
 
 
@@ -658,16 +815,34 @@ def inventory_covers(have: dict, need: dict) -> bool:
 
 
 def _drop_covered(root: str, survivor: str):
-    """只删除 root 里、且 survivor 仍有相同内容的文件。返回留下的路径。"""
+    """只删除 root 里、且 survivor 仍有相同内容的文件。返回留下的路径。
+
+    备份文件不按路径再哈希，只在打开的句柄上读一次。存活副本用核对时的快照。
+    """
     if not root or os.path.islink(root) or safepath.is_reparse_point(root) or not os.path.isdir(root):
         return _list_remaining(root)
-    manifest = _manifest(root)
     have = file_inventory(survivor)
+    snaps = {}
+    if getattr(file_inventory, "snaps_root", None) == os.path.abspath(survivor):
+        snaps = dict(getattr(file_inventory, "snaps", {}) or {})
     covered = {}
-    for rel, (size, mtime, digest) in manifest.items():
-        if have.get(rel) == (size, digest):
-            covered[rel] = (size, mtime, digest)
-    return _release_manifest(root, covered, survivor=survivor)
+    base = os.path.abspath(root)
+    for entry in utils.walk_files(base):
+        rel = os.path.relpath(entry.path, base)
+        expected = have.get(rel)
+        if not expected:
+            continue
+        try:
+            info = os.lstat(entry.path)
+        except OSError:
+            continue
+        size, digest = expected
+        if info.st_size != size or not stat.S_ISREG(info.st_mode):
+            continue
+        mtime = getattr(info, "st_mtime_ns", int(info.st_mtime * 1_000_000_000))
+        covered[rel] = (size, mtime, digest)
+    return _release_manifest(root, covered, survivor=survivor,
+                             survivor_snaps=snaps, survivor_marks=have)
 
 
 def _unlink_link_only(path: str) -> bool:
@@ -735,9 +910,10 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
 
     log(f"复制 {src}")
     log(f"  → {dest}")
-    original = file_inventory(src)
+    original, src_snaps = _inventory_verified(src)
     rc = _robocopy(src, dest, move=False)
-    if rc >= 8 or not inventory_covers(file_inventory(dest), original):
+    dest_marks, dest_snaps = _inventory_verified(dest)
+    if rc >= 8 or not inventory_covers(dest_marks, original):
         remaining = []
         if inventory_covers(file_inventory(src), original) and os.path.isdir(dest) and not os.path.islink(dest):
             remaining = _drop_covered(dest, src)
@@ -745,10 +921,14 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
             return MigrateResult(src, dest, status="partial", backup=dest, remaining=remaining)
         raise MigrateError(f"复制校验失败（robocopy 返回 {rc}），源目录保持原样")
 
-    fresh_manifest = _manifest(src)
-    fresh = {rel: (size, digest) for rel, (size, _mtime, digest) in fresh_manifest.items()}
-    if fresh != original or not inventory_covers(file_inventory(dest), fresh):
+    if (not _tree_still_verified(src, original, src_snaps)
+            or not _tree_still_verified(dest, dest_marks, dest_snaps)):
         raise MigrateError("源目录在复制后发生变化，源文件和目标副本都已保留")
+    fresh_manifest = {}
+    for rel, (size, digest) in original.items():
+        snap = src_snaps.get(rel) or ()
+        mtime = snap[3] if len(snap) > 3 else 0
+        fresh_manifest[rel] = (size, mtime, digest)
 
     backup = src.rstrip("\\/") + ".migrate-bak"
     if os.path.lexists(backup):
@@ -771,7 +951,9 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
             return MigrateResult(src, dest, status="partial", backup=dest, remaining=dest_left)
         raise MigrateError(
             "建立联接失败，源目录已还原，数据未丢失") from exc
-    remaining = _release_manifest(backup, fresh_manifest)
+    remaining = _release_manifest(
+        backup, fresh_manifest, survivor=dest,
+        survivor_snaps=dest_snaps, survivor_marks=dest_marks)
     if remaining:
         log(f"备份里还有未删除的内容：{backup}")
         return MigrateResult(src, dest, status="partial", backup=backup, remaining=remaining)

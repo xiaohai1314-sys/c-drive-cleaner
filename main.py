@@ -230,6 +230,7 @@ class App(tk.Tk):
         self._build_ui()
         self._show_page("clean")
         self.after(100, self._poll)
+        self.after(800, self._check_stray_dirs)
         if self._screenshot:
             self.scan_complete = True
             self.after(250, self._load_screenshot_demo)
@@ -1295,7 +1296,7 @@ class App(tk.Tk):
                 except Exception as exc:
                     errors.append(f"{os.path.basename(path)}：{exc}")
             self._mig_running = False
-            self.queue.put(("bigmove_done", ok, errors))
+            self.queue.put(("bigmove_done", ok, errors, dest))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -2003,17 +2004,20 @@ class App(tk.Tk):
     def _clean_worker(self, chosen):
         lines = ["开始清理"]
         freed = 0
+        errors = []
         for cat in chosen:
             try:
                 result = cleaner.clean_category(cat, log=lines.append)
                 freed += result.freed
+                errors.extend(result.errors)
                 lines.append(f"清理：{cat.name}")
             except Exception as exc:
+                errors.append(f"{cat.name}：{exc}")
                 lines.append(f"清理失败：{cat.name} {exc}")
         lines.append(f"清理结束，共释放 {utils.fmt_size(freed)}")
         self._write_clean_log(lines)
         self._cleaning = False
-        self.queue.put(("clean_done", freed))
+        self.queue.put(("clean_done", freed, errors))
 
     def _run_defrag(self):
         if self._cleaning:
@@ -2101,7 +2105,7 @@ class App(tk.Tk):
             if result.ok:
                 self.queue.put(("mig_done", True, src))
             else:
-                self.queue.put(("mig_done", "partial", result.warning))
+                self.queue.put(("mig_done", "partial", result))
         except Exception as exc:
             self._mig_running = False
             self.queue.put(("mig_done", False, str(exc)))
@@ -2130,10 +2134,64 @@ class App(tk.Tk):
             if result.ok:
                 self.queue.put(("mig_done", True, src))
             else:
-                self.queue.put(("mig_done", "partial", result.warning))
+                self.queue.put(("mig_done", "partial", result))
         except Exception as exc:
             self._mig_running = False
             self.queue.put(("mig_done", False, str(exc)))
+
+    def _check_stray_dirs(self):
+        if self._screenshot:
+            return
+        found = migrate.find_stray_dirs(migrate.known_locations(), max_depth=2)
+        if found:
+            self._show_warning_panel(
+                "发现未清理的搬家备份",
+                "这些目录不会自动删除。请确认里面没有需要保留的文件。",
+                "", found, found)
+        self.after(300000, self._check_stray_dirs)
+
+    def _show_warning_panel(self, title, summary, backup, remaining, quarantine=()):
+        text = migrate.partial_report(backup, remaining, quarantine)
+        if summary:
+            text = summary + ("\n\n" + text if text else "")
+        folder = ""
+        for candidate in [backup, *(remaining or []), *(quarantine or [])]:
+            if not candidate:
+                continue
+            folder = candidate if os.path.isdir(candidate) else os.path.dirname(str(candidate))
+            if folder and os.path.isdir(folder):
+                break
+        win = tk.Toplevel(self)
+        win.title(title)
+        win.configure(bg=WHITE)
+        win.geometry("560x420")
+        tk.Label(win, text=title, bg=WHITE, fg=TEXT,
+                 font=("Microsoft YaHei UI", 14, "bold")).pack(anchor="w", padx=16, pady=(14, 6))
+        box = tk.Text(win, height=14, wrap="word", bg="#f7fbfe", fg=TEXT,
+                      relief="flat", font=("Microsoft YaHei UI", 10))
+        box.pack(fill="both", expand=True, padx=16, pady=6)
+        box.insert("1.0", text)
+        box.configure(state="disabled")
+
+        def open_it():
+            migrate.open_folder(folder)
+
+        bar = tk.Frame(win, bg=WHITE)
+        bar.pack(fill="x", padx=16, pady=12)
+        tk.Button(bar, text="打开文件夹", command=open_it, bg="#23d6a0", fg="white",
+                  relief="flat", padx=12, pady=4).pack(side="left")
+        tk.Button(bar, text="知道了", command=win.destroy, bg="#e8eef5", fg=TEXT,
+                  relief="flat", padx=12, pady=4).pack(side="right")
+        win.transient(self)
+        win.grab_set()
+        win.update_idletasks()
+        width = win.winfo_width()
+        height = win.winfo_height()
+        x = self.winfo_rootx() + max(0, (self.winfo_width() - width) // 2)
+        y = self.winfo_rooty() + max(0, (self.winfo_height() - height) // 2)
+        win.geometry(f"+{x}+{y}")
+        win.lift()
+        return win
 
     def _check_rules_update(self):
         def work():
@@ -2176,7 +2234,15 @@ class App(tk.Tk):
         elif kind == "clean_done":
             self.worker = None
             self._draw_disk_bar()
-            messagebox.showinfo("清理完成", f"本次释放 {utils.fmt_size(message[1])}")
+            freed = message[1]
+            errors = message[2] if len(message) > 2 else []
+            if errors:
+                self._show_warning_panel(
+                    "清理未全部完成",
+                    f"已释放 {utils.fmt_size(freed)}。以下项目未能安全删除：",
+                    "", errors, [])
+            else:
+                messagebox.showinfo("清理完成", f"本次释放 {utils.fmt_size(freed)}")
             self.start_scan()
         elif kind == "big_progress":
             if self.jobs.accept("big", message[1]):
@@ -2231,10 +2297,14 @@ class App(tk.Tk):
             self._render_bigmove()
         elif kind == "bigmove_done":
             ok, errors = message[1], message[2]
-            text = f"已搬家 {len(ok)} 个文件。"
+            dest = message[3] if len(message) > 3 else ""
             if errors:
-                text += "\n" + "\n".join(errors[:8])
-            messagebox.showinfo("搬家结果", text)
+                self._show_warning_panel(
+                    "搬家未完成",
+                    f"已完成 {len(ok)} 个。以下没有按成功处理：",
+                    dest, errors, migrate.find_stray_dirs([dest] if dest else [], max_depth=2))
+            else:
+                messagebox.showinfo("搬家结果", f"已搬家 {len(ok)} 个文件。")
             self.start_bigmove_scan()
         elif kind == "privacy_progress":
             self.privacy_step = message[1]
@@ -2267,7 +2337,17 @@ class App(tk.Tk):
                 messagebox.showinfo("完成", f"已处理：{message[2]}")
                 self.start_migrate_scan()
             elif message[1] == "partial":
-                messagebox.showwarning("未完全完成", message[2])
+                result = message[2]
+                warning = result.warning if hasattr(result, "warning") else str(result)
+                backup = getattr(result, "backup", "") or ""
+                remaining = list(getattr(result, "remaining", ()) or [])
+                nearby = []
+                if backup:
+                    nearby.append(backup if os.path.isdir(backup) else os.path.dirname(backup))
+                nearby.extend(os.path.dirname(item) if item and not os.path.isdir(str(item)) else item
+                              for item in remaining)
+                quarantine = migrate.find_stray_dirs([item for item in nearby if item], max_depth=2)
+                self._show_warning_panel("迁移未完成", warning, backup, remaining, quarantine)
                 self.start_migrate_scan()
             else:
                 messagebox.showerror("失败", message[2])

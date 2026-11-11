@@ -1423,7 +1423,8 @@ class SixthReviewTests(unittest.TestCase):
 
             def hooked_open(path, flags, *args, **kwargs):
                 directory = bool(flags & getattr(os, "O_DIRECTORY", 0))
-                if victim["path"] and not directory and os.path.basename(str(path)) == "a.txt":
+                if (victim["path"] and not directory and kwargs.get("dir_fd") is not None
+                        and os.path.basename(str(path)) == "a.txt"):
                     plant()
                 return real_open(path, flags, *args, **kwargs)
 
@@ -1882,6 +1883,91 @@ class SafetyRaceRegressionTests(unittest.TestCase):
             self.assertEqual(written_path, path)
             with open(path, "rb") as handle:
                 self.assertEqual(handle.read(), payload)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
+class HashBudgetTests(unittest.TestCase):
+    def test_directory_migrate_reads_each_file_at_most_twice(self):
+        src = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(src, "keep.txt"), "wb") as handle:
+                handle.write(b"hash-budget")
+
+            def drive(path):
+                full = os.path.abspath(path)
+                root = os.path.abspath(dest_root)
+                if full == root or full.startswith(root + os.sep):
+                    return "D:"
+                return "C:"
+
+            def robocopy(source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                for name in os.listdir(source):
+                    sp = os.path.join(source, name)
+                    if os.path.isfile(sp) and not os.path.islink(sp):
+                        shutil.copy2(sp, os.path.join(dest, name))
+                return 0
+
+            def link(link_path, target):
+                os.symlink(target, link_path, target_is_directory=True)
+
+            migrate._full_read_counts.clear()
+            with mock.patch.object(migrate, "_drive_of", side_effect=drive), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
+                    mock.patch.object(migrate, "is_junction", return_value=False), \
+                    mock.patch.object(migrate, "create_junction", side_effect=link):
+                result = migrate.migrate(src, dest_root)
+            self.assertTrue(result.ok)
+            self.assertTrue(migrate._full_read_counts)
+            self.assertLessEqual(max(migrate._full_read_counts.values()), 2)
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+
+
+class StrayAndWarningTests(unittest.TestCase):
+    def test_find_stray_dirs_lists_without_deleting(self):
+        root = tempfile.mkdtemp()
+        try:
+            quarantine = os.path.join(root, "work", ".c-drive-cleaner-delete-abc")
+            backup = os.path.join(root, "moved.migrate-bak")
+            os.makedirs(quarantine)
+            os.makedirs(backup)
+            kept = os.path.join(quarantine, "captured")
+            with open(kept, "w", encoding="utf-8") as handle:
+                handle.write("keep")
+            found = migrate.find_stray_dirs([root])
+            self.assertIn(quarantine, found)
+            self.assertIn(backup, found)
+            self.assertTrue(os.path.isdir(quarantine))
+            self.assertTrue(os.path.isdir(backup))
+            with open(kept, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "keep")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_partial_report_lists_backup_leftovers_and_errors(self):
+        text = migrate.partial_report(
+            backup=r"D:\data.migrate-bak",
+            remaining=[r"D:\data.migrate-bak\extra.txt"],
+            quarantine=[r"D:\data\.c-drive-cleaner-delete-1"],
+            errors=["目录项已变化，未删除：C:\\Temp\\a.tmp"],
+        )
+        self.assertIn(r"D:\data.migrate-bak", text)
+        self.assertIn("extra.txt", text)
+        self.assertIn(".c-drive-cleaner-delete-1", text)
+        self.assertIn("未能安全删除", text)
+        self.assertIn("目录项已变化", text)
+
+    def test_open_folder_uses_startfile_on_windows(self):
+        folder = tempfile.mkdtemp()
+        try:
+            with mock.patch.object(migrate.os, "name", "nt"), \
+                    mock.patch.object(migrate.os, "startfile", create=True) as start:
+                self.assertTrue(migrate.open_folder(folder))
+            start.assert_called_once_with(folder)
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
