@@ -2,6 +2,7 @@
 import glob
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 
 from utils import current_user_sid, fixed_drives
@@ -29,6 +30,13 @@ class Category:
     prune_dirs: bool = False
     size_fn: object = None
     untrusted: bool = False
+    # schema v2 条件字段（对照 kclear 规则原语）：
+    exclude: tuple = ()             # 排除的文件名 glob（filtration）
+    min_age_minutes: int = 0        # 只处理 N 分钟前的文件（filetimelimit）
+    process_absent: tuple = ()      # 这些进程在运行时整项跳过（process）
+    detect: tuple = ()              # 探测路径全部存在才启用（detectFile）
+    os_min: str = ""                # 适用系统版本下限，如 "10.0"
+    os_max: str = ""                # 适用系统版本上限（不含）
 
 
 def _env(*parts) -> str:
@@ -72,6 +80,56 @@ def _expand_rule_paths(items):
     return out
 
 
+def _version_tuple(text):
+    parts = []
+    for chunk in str(text or "").split("."):
+        digits = "".join(ch for ch in chunk if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts) or (0,)
+
+
+def _os_in_range(os_min, os_max):
+    """当前系统版本是否落在 [os_min, os_max) 内。非 Windows 上不拦截。"""
+    get = getattr(sys, "getwindowsversion", None)
+    if get is None:
+        return True
+    try:
+        version = get()
+        current = (int(version.major), int(version.minor))
+    except Exception:
+        return True
+    if os_min and current < _version_tuple(os_min):
+        return False
+    if os_max and current >= _version_tuple(os_max):
+        return False
+    return True
+
+
+def _detect_satisfied(items):
+    """detect 里的每条路径都至少要命中一个现存路径，规则才启用。"""
+    for raw in items or []:
+        if not raw:
+            return False
+        expanded = os.path.expandvars(raw)
+        matches = glob.glob(expanded) if ("*" in expanded or "?" in expanded) else [expanded]
+        if not any(os.path.exists(match) for match in matches):
+            return False
+    return True
+
+
+def _pattern_tuple(value):
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item) for item in value if isinstance(item, str) and item)
+
+
+def _age_minutes(value):
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _load_external_rules():
     """从同目录的 rules.json 读取可扩展清理项（规则外置化）。"""
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules.json")
@@ -87,6 +145,10 @@ def _load_external_rules():
     for item in data.get("categories", []):
         key = item.get("key")
         if not key:
+            continue
+        if not _detect_satisfied(item.get("detect", [])):
+            continue
+        if not _os_in_range(item.get("os_min", ""), item.get("os_max", "")):
             continue
         paths = _expand_rule_paths(item.get("paths", []))
         for path in _expand_rule_paths(item.get("glob_dirs", [])):
@@ -109,6 +171,12 @@ def _load_external_rules():
             requires_confirm=bool(item.get("requires_confirm", False)),
             prune_dirs=bool(item.get("prune_dirs", False)),
             untrusted=True,
+            exclude=_pattern_tuple(item.get("exclude", [])),
+            min_age_minutes=_age_minutes(item.get("min_age_minutes", 0)),
+            process_absent=_pattern_tuple(item.get("process_absent", [])),
+            detect=tuple(item.get("detect", []) or []),
+            os_min=str(item.get("os_min", "") or ""),
+            os_max=str(item.get("os_max", "") or ""),
         ))
     return cats
 
@@ -277,9 +345,10 @@ def get_categories():
         name="用户临时文件",
         tier=CONSERVATIVE,
         kind="files",
-        describe="当前用户 Temp 目录下的临时文件",
+        describe="当前用户 Temp 目录下的临时文件（只清 24 小时前的）",
         paths=_existing([temp, os.path.join(local, "Temp")]),
         prune_dirs=True,
+        min_age_minutes=1440,
     ))
 
     cats.append(Category(
@@ -287,9 +356,10 @@ def get_categories():
         name="系统临时文件",
         tier=CONSERVATIVE,
         kind="files",
-        describe="Windows\\Temp 下的临时文件",
+        describe="Windows\\Temp 下的临时文件（只清 24 小时前的）",
         paths=_existing([os.path.join(windows, "Temp")]),
         prune_dirs=True,
+        min_age_minutes=1440,
     ))
 
     cats.append(Category(
@@ -568,6 +638,24 @@ def get_categories():
             describe="其他 Windows 账户或旧系统留下的回收站内容",
             paths=other_bins,
             note="删除后不可恢复，确认这些账户已不再使用",
+            requires_confirm=True,
+        ))
+
+    try:
+        import leftover as _leftover
+        orphan_dirs = _leftover.find_leftovers()
+    except Exception:
+        orphan_dirs = []
+    if orphan_dirs:
+        cats.append(Category(
+            key="app_leftovers",
+            name="卸载残留（疑似）",
+            tier=DEEP,
+            kind="files",
+            describe="在已安装软件里找不到对应项的一级目录，可能是卸载遗留",
+            paths=[item["path"] for item in orphan_dirs],
+            note="仅按名称与安装位置比对：便携软件、手动解压的软件也会被列进来",
+            warning="这些目录未检测到对应的已安装软件，但可能仍在使用，请逐个确认",
             requires_confirm=True,
         ))
 

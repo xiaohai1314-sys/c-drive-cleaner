@@ -99,6 +99,23 @@ def validate_remote_rule(item) -> str:
     tier = item.get("tier", "standard")
     if tier not in _TIERS:
         return "风险档位不合法"
+    # schema v2：远程只许下发"只收紧不放宽"的字段（exclude / min_age_minutes）。
+    # 进程、探测、系统版本条件能改变规则的启用范围，禁止远程下发。
+    for field in ("process_absent", "detect", "os_min", "os_max"):
+        value = item.get(field)
+        if value:
+            return f"远程规则不允许携带 {field}"
+    exclude = item.get("exclude", [])
+    if exclude is not None:
+        if not isinstance(exclude, list) or len(exclude) > 80:
+            return "exclude 格式不正确"
+        for entry in exclude:
+            if not isinstance(entry, str) or not entry or len(entry) > 80:
+                return "exclude 模式不合法"
+    age = item.get("min_age_minutes", 0)
+    if age is not None:
+        if not isinstance(age, int) or isinstance(age, bool) or age < 0 or age > 43200:
+            return "min_age_minutes 不合法"
     for field in ("paths", "glob_dirs", "patterns"):
         value = item.get(field, [])
         if value is None:
@@ -144,6 +161,8 @@ def merge_remote(local, remote):
         cleaned = dict(item)
         cleaned["kind"] = "files"
         cleaned.pop("command", None)
+        for field in ("process_absent", "detect", "os_min", "os_max"):
+            cleaned.pop(field, None)
         local_cats.append(cleaned)
         existing.add(key)
         added += 1

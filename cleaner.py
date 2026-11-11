@@ -33,6 +33,29 @@ def _decode(data: bytes) -> str:
     return data.decode("utf-8", "replace")
 
 
+def _running_processes():
+    """当前进程名集合（小写）。非 Windows 或读取失败返回空集。"""
+    if os.name != "nt":
+        return set()
+    try:
+        proc = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            timeout=30,
+        )
+    except Exception:
+        return set()
+    names = set()
+    for line in _decode(proc.stdout or b"").splitlines():
+        line = line.strip()
+        if line.startswith('"'):
+            name = line.split('"')[1] if '"' in line[1:] else ""
+            if name:
+                names.add(name.lower())
+    return names
+
+
 def clean_category(cat, log=lambda message: None):
     result = CleanResult(cat)
     if cat.kind == "recyclebin":
@@ -43,6 +66,14 @@ def clean_category(cat, log=lambda message: None):
         return _reset_search_index(cat, result, log)
     if cat.kind == "command":
         return _run_command(cat, result, log)
+    absent = [name for name in (getattr(cat, "process_absent", ()) or ())]
+    if absent:
+        running = _running_processes()
+        hit = [name for name in absent if name.lower() in running]
+        if hit:
+            result.message = f"{'、'.join(hit)} 正在运行，已跳过"
+            log(f"    {result.message}")
+            return result
     return _clean_files(cat, result, log)
 
 
@@ -57,10 +88,10 @@ def _clean_files(cat, result, log):
         if not os.path.lexists(root):
             continue
         if os.path.isfile(root):
-            _delete_file(root, allowed, cat.patterns, result, untrusted)
+            _delete_file(root, allowed, cat.patterns, result, untrusted, cat)
             continue
         for entry in walk_files(root):
-            _delete_file(entry.path, allowed, cat.patterns, result, untrusted)
+            _delete_file(entry.path, allowed, cat.patterns, result, untrusted, cat)
         if cat.prune_dirs:
             removed = remove_empty_dirs(root)
             if removed:
@@ -72,7 +103,7 @@ def _clean_files(cat, result, log):
     return result
 
 
-def _delete_file(path, allowed, patterns, result, untrusted=False):
+def _delete_file(path, allowed, patterns, result, untrusted=False, cat=None):
     if is_runtime_path(path):
         return
     if safepath.execution_forbidden(path, untrusted=untrusted):
@@ -81,7 +112,16 @@ def _delete_file(path, allowed, patterns, result, untrusted=False):
     if safepath.is_password_store(path):
         result.skipped += 1
         return
-    if not scanner.match_name(os.path.basename(path), patterns):
+    if cat is not None:
+        if not scanner.name_allowed(os.path.basename(path), cat):
+            return
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = 0
+        if not scanner.age_allowed(mtime, cat):
+            return
+    elif not scanner.match_name(os.path.basename(path), patterns):
         return
     if not is_within(path, allowed):
         result.skipped += 1

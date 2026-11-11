@@ -27,6 +27,18 @@ _CRITICAL_FILES = {
     "ntuser.dat", "ntuser.dat.log",
 }
 
+# 永不清理硬名单：任何清理规则（内置、本地、远程）都不得触碰。
+# 对应毒霸 diskcleanupconfig 的 omitfileanalyzer 保护思路——恢复与
+# 还原机制的工作文件删掉会让系统恢复功能失效，与"垃圾"无关。
+_NEVER_CLEAN_ROOTS = (
+    "\\recovery",
+    "\\system volume information",
+)
+
+_NEVER_CLEAN_FILES = {
+    "usmt.ppkg",
+}
+
 # 紧跟盘符的系统目录。比较时要求目录边界，避免把 Windows.old 误判成 Windows。
 _SYSTEM_ROOTS = (
     "\\windows",
@@ -114,6 +126,19 @@ def is_drive_root(path: str) -> bool:
 def is_password_store(path: str) -> bool:
     """浏览器保存的密码库。隐私清理默认不能删这些文件。"""
     return basename(path).lower() in PASSWORD_FILENAMES
+
+
+def is_never_clean(path: str) -> bool:
+    """永不清理硬名单：恢复目录、还原点卷信息、系统预置包。
+
+    与 is_system_path 的区别：系统路径只拦不可信规则（内置项要清
+    Windows\\Temp 这类位置）；硬名单对所有清理一视同仁地拒绝。
+    """
+    if not path:
+        return True
+    if basename(path).lower() in _NEVER_CLEAN_FILES:
+        return True
+    return _under_marker(path, _NEVER_CLEAN_ROOTS)
 
 
 def is_reparse_point(path: str) -> bool:
@@ -238,6 +263,8 @@ def under_remote_allowlist(path: str, environ=None) -> bool:
 def execution_forbidden(path: str, untrusted=False, environ=None) -> bool:
     """删除前再检查。不可信规则还必须落在远程允许的根目录里，且不能碰系统目录。"""
     if not path or path_syntax_error(path):
+        return True
+    if is_never_clean(path):
         return True
     if is_reparse_point(path) or os.path.islink(path):
         return True

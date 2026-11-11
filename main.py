@@ -45,6 +45,7 @@ if getattr(sys, "frozen", False):
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(APP_DIR, "logs")
+registry.set_backup_root(os.path.join(LOG_DIR, "backups"))
 
 PAGE = "#f7fbfe"
 CARD = "#ffffff"

@@ -1,4 +1,12 @@
-"""注册表痕迹清理：只删除已知的 MRU / 历史记录值，不碰配置项。"""
+"""注册表痕迹清理：只删除已知的 MRU / 历史记录值，不碰配置项。
+
+删除前先把目标键导出到 logs/backups 下的 .reg 文件；导出失败就跳过该键，
+不允许无备份删除。备份文件双击即可恢复。
+"""
+import datetime
+import os
+import subprocess
+
 try:
     import winreg
 except ImportError:  # 非 Windows 上保持可导入，调用时按 0 条处理
@@ -133,6 +141,95 @@ def _delete(target):
     return deleted
 
 
+# ---------- 删除前备份 ----------
+
+_BACKUP_ROOT = None
+_SESSION_DIR = None
+_LAST_BACKUP = {"dir": "", "failed": []}
+
+
+def set_backup_root(path):
+    """由主程序把备份根目录指到与日志相同的目录下。"""
+    global _BACKUP_ROOT, _SESSION_DIR
+    _BACKUP_ROOT = path or None
+    _SESSION_DIR = None
+
+
+def _backup_root():
+    if _BACKUP_ROOT:
+        return _BACKUP_ROOT
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "logs", "backups")
+
+
+def _session_dir():
+    global _SESSION_DIR
+    if _SESSION_DIR:
+        return _SESSION_DIR
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    _SESSION_DIR = os.path.join(_backup_root(), f"reg-{stamp}-{os.getpid()}")
+    return _SESSION_DIR
+
+
+def last_backup_info():
+    """最近一次备份的目录与导出失败的键，供界面提示。"""
+    return {"dir": _LAST_BACKUP["dir"], "failed": list(_LAST_BACKUP["failed"])}
+
+
+def _key_exists(path):
+    if winreg is None:
+        return False
+    try:
+        with winreg.OpenKey(HKCU, path, 0, winreg.KEY_READ):
+            return True
+    except OSError:
+        return False
+
+
+def _export_key(path, dest):
+    """用 reg.exe 导出 HKCU 下的一个键。成功返回 True。"""
+    try:
+        proc = subprocess.run(
+            ["reg.exe", "export", "HKEY_CURRENT_USER\\" + path, dest, "/y"],
+            capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            timeout=60,
+        )
+    except Exception:
+        return False
+    return proc.returncode == 0 and os.path.isfile(dest)
+
+
+def backup_key(path, label=""):
+    """删除前导出一个 HKCU 键。
+
+    键不存在视为已备份（删除本来就是空操作）；键存在但导出失败返回
+    False，调用方必须跳过该键的删除。
+    """
+    if winreg is None:
+        return True
+    if not _key_exists(path):
+        return True
+    session = _session_dir()
+    try:
+        os.makedirs(session, exist_ok=True)
+    except OSError:
+        _LAST_BACKUP["failed"].append(path)
+        return False
+    name = label or path.rsplit("\\", 1)[-1] or "key"
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name)[:60]
+    dest = os.path.join(session, safe + ".reg")
+    counter = 1
+    while os.path.exists(dest):
+        counter += 1
+        dest = os.path.join(session, f"{safe}-{counter}.reg")
+    if _export_key(path, dest):
+        _LAST_BACKUP["dir"] = session
+        return True
+    _LAST_BACKUP["failed"].append(path)
+    return False
+
+
 def group_count(group_key):
     return sum(_count(t) for t in TARGETS if t["group"] == group_key)
 
@@ -159,4 +256,11 @@ def group_count_status(group_key):
 
 
 def group_clean(group_key):
-    return sum(_delete(t) for t in TARGETS if t["group"] == group_key)
+    deleted = 0
+    for target in TARGETS:
+        if target["group"] != group_key:
+            continue
+        if _count(target) and not backup_key(target["path"], target["key"]):
+            continue
+        deleted += _delete(target)
+    return deleted

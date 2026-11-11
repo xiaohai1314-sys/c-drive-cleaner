@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "note": "可扩展清理项。路径支持 %环境变量% 与通配符；glob_dirs 只匹配目录。改这里即可增删清理规则，无需改代码。",
+  "version": 2,
+  "note": "可扩展清理项。路径支持 %环境变量% 与通配符；glob_dirs 只匹配目录。v2 字段：exclude 排除文件名、min_age_minutes 只清 N 分钟前的文件、process_absent 进程运行时跳过、detect 探测路径存在才启用、os_min/os_max 系统版本范围。改这里即可增删清理规则，无需改代码。",
   "categories": [
     {
       "key": "app_wechat_cache",
@@ -26,7 +26,17 @@
         "%APPDATA%\\Tencent\\WeChat\\cdncomm"
       ],
       "prune_dirs": true,
-      "note": "聊天记录在 msg/db_storage，不会被删除"
+      "note": "聊天记录在 msg/db_storage，不会被删除",
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_qq_cache",
@@ -42,7 +52,17 @@
         "%APPDATA%\\Tencent\\QQ\\log",
         "%USERPROFILE%\\Documents\\Tencent Files\\*\\Cache"
       ],
-      "prune_dirs": true
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "privacy_browser",
@@ -109,7 +129,11 @@
       "describe": "对系统盘执行优化/碎片整理，机械盘收益明显，SSD 仅做 TRIM",
       "warning": "耗时较长，期间请勿关机",
       "requires_confirm": true,
-      "command": ["%SystemRoot%\\System32\\defrag.exe", "C:", "/O"],
+      "command": [
+        "%SystemRoot%\\System32\\defrag.exe",
+        "C:",
+        "/O"
+      ],
       "note": "SSD 上只是执行 TRIM，收益有限"
     },
     {
@@ -118,9 +142,23 @@
       "tier": "standard",
       "kind": "files",
       "describe": "钉钉的媒体缓存与日志",
-      "glob_dirs": ["%APPDATA%\\DingTalk\\media_cache", "%APPDATA%\\DingTalk\\log",
-                    "%LOCALAPPDATA%\\DingTalk\\Cache", "%LOCALAPPDATA%\\DingTalk\\logs"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%APPDATA%\\DingTalk\\media_cache",
+        "%APPDATA%\\DingTalk\\log",
+        "%LOCALAPPDATA%\\DingTalk\\Cache",
+        "%LOCALAPPDATA%\\DingTalk\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_wxwork",
@@ -128,9 +166,22 @@
       "tier": "standard",
       "kind": "files",
       "describe": "企业微信的缓存与临时文件",
-      "glob_dirs": ["%APPDATA%\\Tencent\\WXWork\\*\\Cache", "%APPDATA%\\Tencent\\WXWork\\*\\Temp",
-                    "%USERPROFILE%\\Documents\\WXWork\\*\\Cache"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%APPDATA%\\Tencent\\WXWork\\*\\Cache",
+        "%APPDATA%\\Tencent\\WXWork\\*\\Temp",
+        "%USERPROFILE%\\Documents\\WXWork\\*\\Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_feishu",
@@ -138,9 +189,22 @@
       "tier": "standard",
       "kind": "files",
       "describe": "飞书的缓存与日志",
-      "glob_dirs": ["%LOCALAPPDATA%\\Feishu\\cache", "%LOCALAPPDATA%\\Feishu\\log",
-                    "%APPDATA%\\Feishu\\cache"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Feishu\\cache",
+        "%LOCALAPPDATA%\\Feishu\\log",
+        "%APPDATA%\\Feishu\\cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_thunder",
@@ -148,10 +212,22 @@
       "tier": "standard",
       "kind": "files",
       "describe": "迅雷的下载缓存与日志",
-      "glob_dirs": ["%APPDATA%\\Thunder Network\\Thunder\\Profiles\\*\\Cache",
-                    "%LOCALAPPDATA%\\Thunder Network\\Thunder\\Cache",
-                    "%LOCALAPPDATA%\\Thunder Network\\Thunder\\Logs"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%APPDATA%\\Thunder Network\\Thunder\\Profiles\\*\\Cache",
+        "%LOCALAPPDATA%\\Thunder Network\\Thunder\\Cache",
+        "%LOCALAPPDATA%\\Thunder Network\\Thunder\\Logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_cloudmusic",
@@ -159,9 +235,21 @@
       "tier": "standard",
       "kind": "files",
       "describe": "网易云音乐的网页与播放缓存",
-      "glob_dirs": ["%LOCALAPPDATA%\\Netease\\CloudMusic\\Cache",
-                    "%LOCALAPPDATA%\\Netease\\CloudMusic\\webdata"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Netease\\CloudMusic\\Cache",
+        "%LOCALAPPDATA%\\Netease\\CloudMusic\\webdata"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_qqmusic",
@@ -169,10 +257,22 @@
       "tier": "standard",
       "kind": "files",
       "describe": "QQ音乐的缓存与日志",
-      "glob_dirs": ["%LOCALAPPDATA%\\Tencent\\QQMusic\\Cache",
-                    "%APPDATA%\\Tencent\\QQMusic\\Cache",
-                    "%LOCALAPPDATA%\\Tencent\\QQMusic\\Logs"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Tencent\\QQMusic\\Cache",
+        "%APPDATA%\\Tencent\\QQMusic\\Cache",
+        "%LOCALAPPDATA%\\Tencent\\QQMusic\\Logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_iqiyi",
@@ -180,8 +280,21 @@
       "tier": "standard",
       "kind": "files",
       "describe": "爱奇艺的播放缓存",
-      "glob_dirs": ["%APPDATA%\\IQIYI Video\\Cache", "%LOCALAPPDATA%\\IQIYI Video\\Cache"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%APPDATA%\\IQIYI Video\\Cache",
+        "%LOCALAPPDATA%\\IQIYI Video\\Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_txvideo",
@@ -189,9 +302,22 @@
       "tier": "standard",
       "kind": "files",
       "describe": "腾讯视频的播放缓存与日志",
-      "glob_dirs": ["%APPDATA%\\Tencent\\QQLive\\Cache", "%LOCALAPPDATA%\\Tencent\\QQLive\\Cache",
-                    "%APPDATA%\\Tencent\\QQLive\\log"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%APPDATA%\\Tencent\\QQLive\\Cache",
+        "%LOCALAPPDATA%\\Tencent\\QQLive\\Cache",
+        "%APPDATA%\\Tencent\\QQLive\\log"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_bilibili",
@@ -199,8 +325,21 @@
       "tier": "standard",
       "kind": "files",
       "describe": "B 站的缓存与日志",
-      "glob_dirs": ["%LOCALAPPDATA%\\bilibili\\Cache", "%LOCALAPPDATA%\\bilibili\\log"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\bilibili\\Cache",
+        "%LOCALAPPDATA%\\bilibili\\log"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_jianying",
@@ -208,9 +347,21 @@
       "tier": "standard",
       "kind": "files",
       "describe": "剪映的缓存与日志",
-      "glob_dirs": ["%LOCALAPPDATA%\\JianyingPro\\User Data\\Cache",
-                    "%LOCALAPPDATA%\\JianyingPro\\logs"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\JianyingPro\\User Data\\Cache",
+        "%LOCALAPPDATA%\\JianyingPro\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_sogou",
@@ -218,8 +369,21 @@
       "tier": "standard",
       "kind": "files",
       "describe": "搜狗输入法的缓存",
-      "glob_dirs": ["%APPDATA%\\SogouInput\\*\\Cache", "%LOCALAPPDATA%\\SogouInput\\*\\Cache"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%APPDATA%\\SogouInput\\*\\Cache",
+        "%LOCALAPPDATA%\\SogouInput\\*\\Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_office_cache",
@@ -227,9 +391,21 @@
       "tier": "standard",
       "kind": "files",
       "describe": "Office 的文档缓存与遥测",
-      "glob_dirs": ["%LOCALAPPDATA%\\Microsoft\\Office\\16.0\\OfficeFileCache",
-                    "%LOCALAPPDATA%\\Microsoft\\Office\\OTele"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Microsoft\\Office\\16.0\\OfficeFileCache",
+        "%LOCALAPPDATA%\\Microsoft\\Office\\OTele"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_adobe",
@@ -237,9 +413,21 @@
       "tier": "standard",
       "kind": "files",
       "describe": "Adobe 软件的媒体缓存",
-      "glob_dirs": ["%LOCALAPPDATA%\\Adobe\\Common\\Media Cache",
-                    "%LOCALAPPDATA%\\Adobe\\Common\\Media Cache Files"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Adobe\\Common\\Media Cache",
+        "%LOCALAPPDATA%\\Adobe\\Common\\Media Cache Files"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_steam",
@@ -247,8 +435,21 @@
       "tier": "standard",
       "kind": "files",
       "describe": "Steam 的网页缓存与日志",
-      "glob_dirs": ["%LOCALAPPDATA%\\Steam\\htmlcache", "%LOCALAPPDATA%\\Steam\\logs"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Steam\\htmlcache",
+        "%LOCALAPPDATA%\\Steam\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     },
     {
       "key": "app_teams",
@@ -256,9 +457,22 @@
       "tier": "standard",
       "kind": "files",
       "describe": "Microsoft Teams 的缓存与日志",
-      "glob_dirs": ["%APPDATA%\\Microsoft\\Teams\\Cache", "%APPDATA%\\Microsoft\\Teams\\logs",
-                    "%APPDATA%\\Microsoft\\Teams\\Code Cache"],
-      "prune_dirs": true
+      "glob_dirs": [
+        "%APPDATA%\\Microsoft\\Teams\\Cache",
+        "%APPDATA%\\Microsoft\\Teams\\logs",
+        "%APPDATA%\\Microsoft\\Teams\\Code Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
     }
   ]
 }

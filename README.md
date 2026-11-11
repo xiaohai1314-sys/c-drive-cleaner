@@ -87,6 +87,15 @@ Windows 下的图形化 C 盘清理工具，先扫描、再勾选、后清理。
 - `tier`：`conservative` / `standard` / `deep`
 - `warning`：风险提示，清理确认时显示
 - `kind`：`files` / `command`（`command` 只允许写在本机 `rules.json` 里，例如碎片整理。远程更新不能带入命令）
+- `exclude`：排除的文件名通配（如 `*.docx`），命中 patterns 但被排除的文件不动
+- `min_age_minutes`：只清理 N 分钟前修改的文件（内置用户/系统临时文件默认 1440）
+- `process_absent`：列出的进程（如 `WeChat.exe`）运行中时整项跳过（仅本机规则）
+- `detect`：探测路径全部存在时才启用该规则（仅本机规则）
+- `os_min` / `os_max`：适用的系统版本范围，如 `"os_min": "10.0"`（仅本机规则）
+
+远程更新只允许下发 `exclude` 与 `min_age_minutes` 这类只收紧不放宽的字段；
+恢复目录、系统还原卷信息与 `usmt.ppkg` 属于永不清理硬名单，任何规则都不能碰。
+注册表痕迹清理前会自动把目标键导出到 `logs\backups` 下的 .reg 文件，导出失败则跳过不删。
 
 内置通过 `rules.json` 增加的项包括：微信/QQ 专清缓存、浏览器隐私痕迹、最近使用记录、系统瘦身（日文/韩文输入法）、磁盘碎片整理。
 
