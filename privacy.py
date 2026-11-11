@@ -25,6 +25,14 @@ SHOP_DOMAINS = (
     "taobao.com", "tmall.com", "jd.com", "yangkeduo.com", "pinduoduo.com",
     "amazon.com", "amazon.cn", "smzdm.com", "suning.com", "dangdang.com",
 )
+FINANCE_DOMAINS = (
+    "alipay.com", "paypal.com", "icbc.com.cn", "ccb.com", "cmbchina.com",
+    "unionpay.com", "abchina.com",
+)
+MEDICAL_DOMAINS = (
+    "haodf.com", "dxy.cn", "xywy.com", "chunyuyisheng.com", "guahao.com",
+)
+SENSITIVE_NAME_WORDS = ("身份证", "密码", "银行卡", "合同", "护照", "工资")
 
 SECTIONS = (
     ("high", "高危隐私", "容易泄露的个人敏感信息"),
@@ -141,6 +149,12 @@ def _count(conn, sql, params=()):
     return int(row[0])
 
 
+def _count_domains(conn, table, domains):
+    clause = " OR ".join(["url LIKE ?" for _ in domains])
+    params = tuple(f"%{domain}%" for domain in domains)
+    return _count(conn, f"SELECT COUNT(*) FROM {table} WHERE {clause}", params)
+
+
 def _shop_where(column="url"):
     clause = " OR ".join([f"{column} LIKE ?" for _ in SHOP_DOMAINS])
     params = tuple(f"%{domain}%" for domain in SHOP_DOMAINS)
@@ -149,7 +163,7 @@ def _shop_where(column="url"):
 
 def history_stats(path: str) -> dict:
     """读取一份浏览器历史库的条数。打不开时各项为 0。"""
-    stats = {"urls": 0, "downloads": 0, "shop": 0}
+    stats = {"urls": 0, "downloads": 0, "shop": 0, "money": 0, "medical": 0}
     conn, tmp = _connect_copy(path)
     if conn is None:
         return stats
@@ -170,6 +184,12 @@ def history_stats(path: str) -> dict:
         if stats["shop"] == 0:
             clause, params = _shop_where("url")
             stats["shop"] = _count(conn, f"SELECT COUNT(*) FROM moz_places WHERE {clause}", params)
+        stats["money"] = _count_domains(conn, "urls", FINANCE_DOMAINS)
+        if stats["money"] == 0:
+            stats["money"] = _count_domains(conn, "moz_places", FINANCE_DOMAINS)
+        stats["medical"] = _count_domains(conn, "urls", MEDICAL_DOMAINS)
+        if stats["medical"] == 0:
+            stats["medical"] = _count_domains(conn, "moz_places", MEDICAL_DOMAINS)
     finally:
         _close_copy(conn, tmp)
     return stats
@@ -244,7 +264,7 @@ def _shop_sql():
 def _scan_chromium(spec):
     files = []
     history_files = []
-    urls = downloads = shop = cookies = 0
+    urls = downloads = shop = cookies = money = medical = 0
     for profile in _profiles(spec.get("root", "")):
         picked = collect_chromium_files(profile)
         files.extend(picked)
@@ -255,6 +275,8 @@ def _scan_chromium(spec):
             urls += stats["urls"]
             downloads += stats["downloads"]
             shop += stats["shop"]
+            money += stats.get("money") or 0
+            medical += stats.get("medical") or 0
         for cookie in (os.path.join(profile, "Cookies"),
                        os.path.join(profile, "Network", "Cookies")):
             if os.path.isfile(cookie):
@@ -269,6 +291,8 @@ def _scan_chromium(spec):
         "history_files": history_files,
         "downloads": downloads,
         "shop": shop,
+        "money": money,
+        "medical": medical,
         "cookies": cookies,
         "action": "files",
     }
@@ -277,7 +301,7 @@ def _scan_chromium(spec):
 def _scan_firefox(spec):
     files = []
     history_files = []
-    urls = downloads = shop = cookies = 0
+    urls = downloads = shop = cookies = money = medical = 0
     for profile in _firefox_profiles(spec.get("root", "")):
         places = os.path.join(profile, "places.sqlite")
         cookies_db = os.path.join(profile, "cookies.sqlite")
@@ -288,6 +312,8 @@ def _scan_firefox(spec):
             urls += stats["urls"]
             downloads += stats["downloads"]
             shop += stats["shop"]
+            money += stats.get("money") or 0
+            medical += stats.get("medical") or 0
         if os.path.isfile(cookies_db) and not safepath.is_password_store(cookies_db):
             files.append(cookies_db)
             cookies += cookie_count(cookies_db)
@@ -301,6 +327,8 @@ def _scan_firefox(spec):
         "history_files": history_files,
         "downloads": downloads,
         "shop": shop,
+        "money": money,
+        "medical": medical,
         "cookies": cookies,
         "action": "files",
     }
@@ -359,11 +387,29 @@ def _scan_high(cookie_records):
                     recent_files.append(path)
         except OSError:
             recent_files = []
+    sensitive = [path for path in recent_files
+                 if any(word in os.path.basename(path) for word in SENSITIVE_NAME_WORDS)]
+    money = sum(int(item.get("money") or 0) for item in cookie_records)
+    shop = sum(int(item.get("shop") or 0) for item in cookie_records)
+    medical = sum(int(item.get("medical") or 0) for item in cookie_records)
+    # 成人内容和密码库不做内容扫描，卡片固定为 0，避免编造条数。
     return [
-        {"id": "cookies", "section": "high", "name": "Cookie / 登录状态",
+        {"id": "risk_file", "section": "high", "name": "文件敏感隐私",
+         "count": len(sensitive), "files": sensitive, "action": "files"},
+        {"id": "risk_other", "section": "high", "name": "其他敏感隐私",
+         "count": 0, "files": [], "action": "files"},
+        {"id": "risk_money", "section": "high", "name": "财产安全隐私",
+         "count": money, "files": [], "action": "files"},
+        {"id": "risk_shop", "section": "high", "name": "网络购物痕迹",
+         "count": shop, "files": [], "action": "files"},
+        {"id": "risk_medical", "section": "high", "name": "医疗信息隐私",
+         "count": medical, "files": [], "action": "files"},
+        {"id": "risk_adult", "section": "high", "name": "成人敏感隐私",
+         "count": 0, "files": [], "action": "files"},
+        {"id": "risk_leak", "section": "high", "name": "泄露账号密码",
+         "count": 0, "files": [], "action": "files"},
+        {"id": "cookies", "section": "high", "name": "Cookie",
          "count": cookies, "files": cookie_files, "action": "files"},
-        {"id": "recent_files", "section": "high", "name": "最近文档",
-         "count": len(recent_files), "files": recent_files, "action": "files"},
     ]
 
 
@@ -519,6 +565,10 @@ def scan(progress=None):
         "id": "shop", "section": "shop", "name": "网络购物记录",
         "count": shop, "files": [], "sql_jobs": sql_shop, "action": "sql",
     })
+    for record in records:
+        if record.get("id") == "risk_shop":
+            record["action"] = "sql"
+            record["sql_jobs"] = list(sql_shop)
     push("电脑使用痕迹")
     records.extend(_scan_computer())
     push("软件使用痕迹")

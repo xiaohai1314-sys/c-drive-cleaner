@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+import datdecode
 import cleaner
 import dupes
 import fragviz
@@ -521,6 +522,28 @@ class PrivacyAndHistoryTests(unittest.TestCase):
             self.assertEqual(rows[0]["items"], 1)
         finally:
             shutil.rmtree(folder, ignore_errors=True)
+
+
+class DatDecodeTests(unittest.TestCase):
+    def test_xor_roundtrip_jpeg_png_gif(self):
+        import io
+        from PIL import Image
+        samples = {}
+        for fmt, color in (("JPEG", (200, 10, 10)), ("PNG", (10, 180, 40)), ("GIF", (10, 40, 200))):
+            image = Image.new("RGB", (6, 6), color)
+            buffer = io.BytesIO()
+            image.save(buffer, format=fmt)
+            samples[fmt] = buffer.getvalue()
+        for fmt, raw in samples.items():
+            encoded = bytes(byte ^ 0x5A for byte in raw)
+            self.assertEqual(datdecode.xor_key(encoded), 0x5A)
+            decoded = datdecode.decode_dat(encoded)
+            self.assertTrue(decoded.startswith(raw[:4]))
+            self.assertEqual(Image.open(io.BytesIO(decoded)).size, (6, 6))
+
+    def test_plain_text_is_not_decoded(self):
+        self.assertIsNone(datdecode.xor_key(b"hello world!!"))
+        self.assertIsNone(datdecode.decode_dat(b"\x00\x01\x02\x03\x04"))
 
 
 class FragVizTests(unittest.TestCase):
