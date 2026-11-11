@@ -15,6 +15,7 @@ import scanner
 import fragviz
 import history
 import imclean
+import main
 import migrate
 import privacy
 import ruleupdate
@@ -1894,6 +1895,7 @@ class HashBudgetTests(unittest.TestCase):
         try:
             with open(os.path.join(src, "keep.txt"), "wb") as handle:
                 handle.write(b"hash-budget")
+            source_info = os.stat(os.path.join(src, "keep.txt"))
 
             def drive(path):
                 full = os.path.abspath(path)
@@ -1922,9 +1924,78 @@ class HashBudgetTests(unittest.TestCase):
             self.assertTrue(result.ok)
             self.assertTrue(migrate._full_read_counts)
             self.assertLessEqual(max(migrate._full_read_counts.values()), 2)
+            self.assertEqual(
+                migrate._full_read_counts.get((source_info.st_dev, source_info.st_ino)), 2)
         finally:
             shutil.rmtree(src, ignore_errors=True)
             shutil.rmtree(dest_root, ignore_errors=True)
+
+
+class WindowsSnapshotTests(unittest.TestCase):
+    def test_same_size_content_change_with_restored_mtime_rehashes_survivor(self):
+        folder = tempfile.mkdtemp()
+        try:
+            path = os.path.join(folder, "survivor.bin")
+            with open(path, "wb") as handle:
+                handle.write(b"known-good")
+            with mock.patch.object(migrate.os, "name", "nt"), \
+                    mock.patch.object(migrate.safepath, "is_reparse_point", return_value=False):
+                marked = migrate._fingerprint_with_snap(path)
+                before = os.stat(path)
+                with open(path, "wb") as handle:
+                    handle.write(b"changed!!!")
+                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+                self.assertEqual(migrate._identity_tuple(os.lstat(path)), marked[2])
+                self.assertFalse(migrate._survivor_still(
+                    path, marked[2], (marked[0], marked[1])))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_same_size_windows_survivor_change_keeps_correct_backup(self):
+        folder = tempfile.mkdtemp()
+        try:
+            backup_root = os.path.join(folder, "source.migrate-bak")
+            survivor_root = os.path.join(folder, "target")
+            os.makedirs(backup_root)
+            os.makedirs(survivor_root)
+            backup = os.path.join(backup_root, "item")
+            survivor = os.path.join(survivor_root, "item")
+            with open(backup, "wb") as handle:
+                handle.write(b"known-good")
+            with open(survivor, "wb") as handle:
+                handle.write(b"known-good")
+
+            with mock.patch.object(migrate.os, "name", "nt"), \
+                    mock.patch.object(migrate.safepath, "is_reparse_point", return_value=False):
+                marked = migrate._fingerprint_with_snap(survivor)
+                backup_mark = migrate._fingerprint_with_snap(backup)
+                before = os.stat(survivor)
+                with open(survivor, "wb") as handle:
+                    handle.write(b"changed!!!")
+                os.utime(survivor, ns=(before.st_atime_ns, before.st_mtime_ns))
+                snap = marked[2]
+                manifest = {"item": (backup_mark[0], backup_mark[2][3], backup_mark[1])}
+
+                def unlink_if_survivor_matches(path, _size, _digest, survivor_check=None):
+                    if survivor_check is None or not survivor_check():
+                        return False
+                    os.remove(path)
+                    return True
+
+                with mock.patch.object(migrate, "_verified_unlink_windows",
+                                       side_effect=unlink_if_survivor_matches):
+                    remaining = migrate._release_manifest(
+                        backup_root, manifest, survivor=survivor_root,
+                        survivor_snaps={"item": snap},
+                        survivor_marks={"item": (marked[0], marked[1])})
+
+            self.assertTrue(os.path.isfile(backup))
+            with open(backup, "rb") as handle:
+                self.assertEqual(handle.read(), b"known-good")
+            self.assertIn(backup, remaining)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 class StrayAndWarningTests(unittest.TestCase):
@@ -1948,6 +2019,46 @@ class StrayAndWarningTests(unittest.TestCase):
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
+    def test_find_stray_dirs_finds_deep_directories_and_single_file_backups(self):
+        root = tempfile.mkdtemp()
+        try:
+            deep = os.path.join(root, "one", "two", "three", "four")
+            os.makedirs(deep)
+            backup_dir = os.path.join(deep, "folder.migrate-bak")
+            os.makedirs(backup_dir)
+            backup_file = os.path.join(deep, "movie.bin.migrate-bak")
+            with open(backup_file, "wb") as handle:
+                handle.write(b"keep")
+
+            found = migrate.find_stray_dirs([root], max_depth=None)
+            self.assertIn(backup_dir, found)
+            self.assertIn(backup_file, found)
+            self.assertTrue(os.path.isdir(backup_dir))
+            with open(backup_file, "rb") as handle:
+                self.assertEqual(handle.read(), b"keep")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_known_locations_includes_local_volumes_and_app_roots(self):
+        volume = tempfile.mkdtemp()
+        profile = tempfile.mkdtemp()
+        appdata = tempfile.mkdtemp()
+        program_files = tempfile.mkdtemp()
+        try:
+            with mock.patch.object(migrate, "_mounted_drive_roots", return_value=[volume]):
+                roots = migrate.known_locations({
+                    "USERPROFILE": profile,
+                    "APPDATA": appdata,
+                    "ProgramFiles": program_files,
+                })
+            self.assertIn(volume, roots)
+            self.assertIn(profile, roots)
+            self.assertIn(appdata, roots)
+            self.assertIn(program_files, roots)
+        finally:
+            for path in (volume, profile, appdata, program_files):
+                shutil.rmtree(path, ignore_errors=True)
+
     def test_partial_report_lists_backup_leftovers_and_errors(self):
         text = migrate.partial_report(
             backup=r"D:\data.migrate-bak",
@@ -1970,6 +2081,43 @@ class StrayAndWarningTests(unittest.TestCase):
             start.assert_called_once_with(folder)
         finally:
             shutil.rmtree(folder, ignore_errors=True)
+
+    def test_open_folder_selects_single_file_backup_on_windows(self):
+        folder = tempfile.mkdtemp()
+        try:
+            backup = os.path.join(folder, "movie.bin.migrate-bak")
+            with open(backup, "wb") as handle:
+                handle.write(b"keep")
+            with mock.patch.object(migrate.os, "name", "nt"), \
+                    mock.patch.object(migrate.os, "startfile", create=True), \
+                    mock.patch.object(migrate.subprocess, "Popen") as launch:
+                self.assertTrue(migrate.open_folder(backup))
+            launch.assert_called_once_with(
+                ["explorer.exe", "/select,", os.path.normpath(backup)],
+                creationflags=migrate.CREATE_NO_WINDOW)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_bigmove_warning_uses_actual_backup_not_destination(self):
+        destination = tempfile.mkdtemp()
+        try:
+            backup = os.path.join(destination, "source.bin.migrate-bak")
+            with open(backup, "wb") as handle:
+                handle.write(b"recover me")
+            app = main.App.__new__(main.App)
+            app._show_warning_panel = mock.Mock()
+            app.start_bigmove_scan = mock.Mock()
+            with mock.patch.object(main.migrate, "find_stray_dirs", return_value=[]):
+                app._handle_bigmove_done((
+                    "bigmove_done", [], ["source.bin：未完成"], destination, [backup]))
+
+            args = app._show_warning_panel.call_args.args
+            self.assertEqual(args[2], backup)
+            self.assertNotEqual(args[2], destination)
+            self.assertIn(backup, migrate.partial_report(args[2], args[3], args[4]))
+            app.start_bigmove_scan.assert_called_once_with()
+        finally:
+            shutil.rmtree(destination, ignore_errors=True)
 
 
 class FragVizTests(unittest.TestCase):

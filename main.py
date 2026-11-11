@@ -192,6 +192,7 @@ class App(tk.Tk):
         self._dup_running = False
         self._big_running = False
         self._mig_running = False
+        self._stray_scan_running = False
         self._im_running = {"wechat": False, "qq": False}
         self._frag_running = False
         self.jobs = scanjobs.ScanJobs()
@@ -1285,7 +1286,7 @@ class App(tk.Tk):
         self._mig_running = True
 
         def work():
-            ok, errors = [], []
+            ok, errors, backups = [], [], []
             for path in paths:
                 try:
                     result = migrate.migrate_file(path, dest)
@@ -1293,10 +1294,16 @@ class App(tk.Tk):
                         ok.append(path)
                     else:
                         errors.append(f"{os.path.basename(path)}：{result.warning}")
+                        if result.backup:
+                            backups.append(result.backup)
                 except Exception as exc:
                     errors.append(f"{os.path.basename(path)}：{exc}")
+                    backup = path + ".migrate-bak"
+                    if os.path.lexists(backup):
+                        backups.append(backup)
             self._mig_running = False
-            self.queue.put(("bigmove_done", ok, errors, dest))
+            self.queue.put(("bigmove_done", ok, errors, dest,
+                            list(dict.fromkeys(backups))))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -2142,25 +2149,54 @@ class App(tk.Tk):
     def _check_stray_dirs(self):
         if self._screenshot:
             return
-        found = migrate.find_stray_dirs(migrate.known_locations(), max_depth=2)
-        if found:
-            self._show_warning_panel(
-                "发现未清理的搬家备份",
-                "这些目录不会自动删除。请确认里面没有需要保留的文件。",
-                "", found, found)
+        if not self._stray_scan_running:
+            self._stray_scan_running = True
+            threading.Thread(target=self._scan_stray_dirs, daemon=True).start()
         self.after(300000, self._check_stray_dirs)
+
+    def _scan_stray_dirs(self):
+        try:
+            found = migrate.find_stray_dirs(migrate.known_locations(), max_depth=None)
+        except Exception:
+            found = []
+        self.queue.put(("stray_dirs", found))
+
+    def _handle_bigmove_done(self, message):
+        ok, errors = message[1], message[2]
+        dest = message[3] if len(message) > 3 else ""
+        backups = list(message[4] or []) if len(message) > 4 else []
+        if errors:
+            backup = backups[0] if backups else ""
+            remaining = backups[1:] + errors
+            self._show_warning_panel(
+                "搬家未完成",
+                f"已完成 {len(ok)} 个。以下没有按成功处理：",
+                backup, remaining,
+                migrate.find_stray_dirs([dest] if dest else [], max_depth=2))
+        else:
+            messagebox.showinfo("搬家结果", f"已搬家 {len(ok)} 个文件。")
+        self.start_bigmove_scan()
 
     def _show_warning_panel(self, title, summary, backup, remaining, quarantine=()):
         text = migrate.partial_report(backup, remaining, quarantine)
         if summary:
             text = summary + ("\n\n" + text if text else "")
-        folder = ""
-        for candidate in [backup, *(remaining or []), *(quarantine or [])]:
+        candidates = [backup, *(remaining or []), *(quarantine or [])]
+        open_path = ""
+        for candidate in candidates:
             if not candidate:
                 continue
-            folder = candidate if os.path.isdir(candidate) else os.path.dirname(str(candidate))
-            if folder and os.path.isdir(folder):
+            if os.path.lexists(str(candidate)):
+                open_path = str(candidate)
                 break
+        if not open_path:
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                folder = os.path.dirname(str(candidate))
+                if folder and os.path.isdir(folder):
+                    open_path = folder
+                    break
         win = tk.Toplevel(self)
         win.title(title)
         win.configure(bg=WHITE)
@@ -2174,7 +2210,7 @@ class App(tk.Tk):
         box.configure(state="disabled")
 
         def open_it():
-            migrate.open_folder(folder)
+            migrate.open_folder(open_path)
 
         bar = tk.Frame(win, bg=WHITE)
         bar.pack(fill="x", padx=16, pady=12)
@@ -2296,16 +2332,15 @@ class App(tk.Tk):
             self.bigmove_rows = message[2]
             self._render_bigmove()
         elif kind == "bigmove_done":
-            ok, errors = message[1], message[2]
-            dest = message[3] if len(message) > 3 else ""
-            if errors:
+            self._handle_bigmove_done(message)
+        elif kind == "stray_dirs":
+            self._stray_scan_running = False
+            found = message[1]
+            if found:
                 self._show_warning_panel(
-                    "搬家未完成",
-                    f"已完成 {len(ok)} 个。以下没有按成功处理：",
-                    dest, errors, migrate.find_stray_dirs([dest] if dest else [], max_depth=2))
-            else:
-                messagebox.showinfo("搬家结果", f"已搬家 {len(ok)} 个文件。")
-            self.start_bigmove_scan()
+                    "发现未清理的搬家备份",
+                    "这些路径不会自动删除。请确认里面没有需要保留的文件。",
+                    "", found, found)
         elif kind == "privacy_progress":
             self.privacy_step = message[1]
             self.privacy_records = message[2]
