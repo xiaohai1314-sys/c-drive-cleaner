@@ -105,7 +105,7 @@ class ShippedRulesTests(unittest.TestCase):
     def test_count_and_unique_keys(self):
         data = _shipped()
         cats = data["categories"]
-        self.assertGreaterEqual(len(cats), 95)
+        self.assertGreaterEqual(len(cats), 600)
         keys = [c["key"] for c in cats]
         self.assertEqual(len(keys), len(set(keys)))
 
@@ -121,6 +121,7 @@ class ShippedRulesTests(unittest.TestCase):
                                  f"{cat['key']}: {target}")
 
     def test_p3_rules_pass_execution_gate(self):
+        # P3 第一阶段的键集保留单独校验（历史基线）。
         for cat in _shipped()["categories"]:
             if cat["key"] not in P3_KEYS:
                 continue
@@ -130,11 +131,21 @@ class ShippedRulesTests(unittest.TestCase):
                         safepath.under_remote_allowlist(_expand(target), FAKE_ENV),
                         f"{cat['key']}: {target}")
 
+    def test_all_rules_pass_gate_except_known_blocked(self):
+        # 600 阶段起：全量规则都必须过执行门，唯一的例外是登记在案的
+        # 存量 KNOWN_BLOCKED（隐私专页/Documents 库/SystemRoot 等）。
+        for cat in _shipped()["categories"]:
+            for field in ("paths", "glob_dirs"):
+                for target in cat.get(field) or []:
+                    if (cat["key"], target) in KNOWN_BLOCKED:
+                        continue
+                    self.assertTrue(
+                        safepath.under_remote_allowlist(_expand(target), FAKE_ENV),
+                        f"{cat['key']}: {target}")
+
     def test_blocked_set_does_not_grow(self):
         blocked = set()
         for cat in _shipped()["categories"]:
-            if cat["key"] in P3_KEYS:
-                continue
             for field in ("paths", "glob_dirs"):
                 for target in cat.get(field) or []:
                     if not safepath.under_remote_allowlist(_expand(target), FAKE_ENV):

@@ -163,6 +163,7 @@ _REMOTE_CACHE_PARTS = {
     "cache2", "startupcache", "media_cache", "web cache", "glcache",
     "dxcache", "npm-cache", "v3-cache", "go-build", "componentmodelcache",
     "officefilecache", "media cache", "media cache files", "webdata",
+    "webcache",
     "temp",
 }
 
