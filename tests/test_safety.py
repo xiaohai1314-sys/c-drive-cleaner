@@ -3,6 +3,8 @@ import os
 import shutil
 import sqlite3
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -21,6 +23,26 @@ import privacy
 import ruleupdate
 import safepath
 import shredder
+
+
+class ImportSafetyTests(unittest.TestCase):
+    def test_main_import_does_not_require_tkinter(self):
+        script = """
+import builtins
+real_import = builtins.__import__
+def import_without_tkinter(name, *args, **kwargs):
+    if name == "tkinter" or name.startswith("tkinter."):
+        raise ImportError("tkinter blocked for test")
+    return real_import(name, *args, **kwargs)
+builtins.__import__ = import_without_tkinter
+import main
+assert main.tk is None
+"""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        result = subprocess.run(
+            [sys.executable, "-c", script], cwd=root,
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class PathProtectionTests(unittest.TestCase):
@@ -1886,6 +1908,58 @@ class SafetyRaceRegressionTests(unittest.TestCase):
                 self.assertEqual(handle.read(), payload)
         finally:
             shutil.rmtree(folder, ignore_errors=True)
+
+
+@unittest.skipIf(os.name == "nt", "该回归覆盖 POSIX 源文件快照优化路径")
+class PosixSourceSnapshotTests(unittest.TestCase):
+    def test_directory_migrate_rechecks_content_when_source_snapshot_matches(self):
+        src = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp()
+        source_file = os.path.join(src, "item.bin")
+        dest_file = os.path.join(dest_root, os.path.basename(src), "item.bin")
+        backup = src.rstrip("\\/") + ".migrate-bak"
+        try:
+            with open(source_file, "wb") as handle:
+                handle.write(b"known-good")
+            stable_snapshot = migrate._identity_tuple(os.lstat(source_file))
+
+            def drive(path):
+                full = os.path.abspath(path)
+                root = os.path.abspath(dest_root)
+                return "D:" if full == root or full.startswith(root + os.sep) else "C:"
+
+            def robocopy(source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                shutil.copy2(source_file, os.path.join(dest, "item.bin"))
+                before = os.stat(source_file)
+                with open(source_file, "wb") as handle:
+                    handle.write(b"changed!!!")
+                os.utime(source_file, ns=(before.st_atime_ns, before.st_mtime_ns))
+                return 0
+
+            def link(link_path, target):
+                os.symlink(target, link_path, target_is_directory=True)
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=drive), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
+                    mock.patch.object(migrate, "is_junction", return_value=False), \
+                    mock.patch.object(migrate, "create_junction", side_effect=link), \
+                    mock.patch.object(migrate, "_tree_metadata_still", return_value=True), \
+                    mock.patch.object(migrate, "_identity_tuple", return_value=stable_snapshot):
+                with self.assertRaisesRegex(migrate.MigrateError, "源目录在复制后发生变化"):
+                    migrate.migrate(src, dest_root)
+
+            with open(source_file, "rb") as handle:
+                self.assertEqual(handle.read(), b"changed!!!")
+            with open(dest_file, "rb") as handle:
+                self.assertEqual(handle.read(), b"known-good")
+        finally:
+            if os.path.islink(src):
+                os.unlink(src)
+            else:
+                shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+            shutil.rmtree(backup, ignore_errors=True)
 
 
 class HashBudgetTests(unittest.TestCase):

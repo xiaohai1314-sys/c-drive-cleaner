@@ -7,8 +7,12 @@ import sys
 import tempfile
 import threading
 import time
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, ttk
+except ImportError:
+    tk = None
+    filedialog = messagebox = ttk = None
 
 import categories
 import cleaner
@@ -30,6 +34,11 @@ import shredder
 import utils
 import look
 import windrop
+
+_TkLabel = tk.Label if tk is not None else object
+_TkCanvas = tk.Canvas if tk is not None else object
+_TkFrame = tk.Frame if tk is not None else object
+_TkRoot = tk.Tk if tk is not None else object
 
 if getattr(sys, "frozen", False):
     APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
@@ -82,7 +91,7 @@ def _round_rect(canvas, x1, y1, x2, y2, r, **kwargs):
     return canvas.create_polygon(points, smooth=True, **kwargs)
 
 
-class GreenButton(tk.Label):
+class GreenButton(_TkLabel):
     def __init__(self, master, text, command, width=156, height=48):
         normal = look.button(text, GREEN, width, height)
         hover = look.button(text, GREEN_DARK, width, height)
@@ -94,7 +103,7 @@ class GreenButton(tk.Label):
         self.bind("<Leave>", lambda _e: self.configure(image=self._normal))
 
 
-class IconTile(tk.Canvas):
+class IconTile(_TkCanvas):
     def __init__(self, master, color, symbol, size=34):
         super().__init__(master, width=size, height=size,
                          bg=master.cget("bg"), highlightthickness=0)
@@ -103,7 +112,7 @@ class IconTile(tk.Canvas):
                          font=("Microsoft YaHei UI", 11, "bold"))
 
 
-class Pill(tk.Canvas):
+class Pill(_TkCanvas):
     def __init__(self, master, text, bg, fg="white", height=20):
         width = max(34, int(len(text) * 8.5) + 16)
         super().__init__(master, width=width, height=height,
@@ -113,7 +122,7 @@ class Pill(tk.Canvas):
                          font=("Microsoft YaHei UI", 9, "bold"))
 
 
-class SidebarItem(tk.Frame):
+class SidebarItem(_TkFrame):
     def __init__(self, master, key, label, symbol, color, command):
         super().__init__(master, bg=SIDEBAR_BG, cursor="hand2")
         self.key = key
@@ -150,7 +159,7 @@ class SidebarItem(tk.Frame):
         self.size_label.configure(bg=bg, fg=ORANGE)
 
 
-class App(tk.Tk):
+class App(_TkRoot):
     def __init__(self):
         super().__init__()
         look.bind(self)
@@ -2573,6 +2582,8 @@ class App(tk.Tk):
         self.scan_complete = True
 
 def main():
+    if tk is None:
+        raise RuntimeError("图形界面需要 Python tkinter 组件；当前环境未提供该组件。")
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:

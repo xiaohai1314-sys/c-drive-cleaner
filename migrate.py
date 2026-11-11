@@ -308,7 +308,7 @@ def _survivor_still(path: str, snap, expected) -> bool:
 
 
 def _tree_still_verified(root: str, marks: dict, snaps: dict) -> bool:
-    """检查目录文件集和内容；Windows 不复用元数据快照，逐个核对摘要。"""
+    """检查目录文件集和内容；逐个重新核对源文件摘要，不复用元数据快照。"""
     if not root or os.path.islink(root) or not os.path.isdir(root):
         return False
     base = os.path.abspath(root)
@@ -325,9 +325,9 @@ def _tree_still_verified(root: str, marks: dict, snaps: dict) -> bool:
         return False
     for rel, info in current.items():
         snap = snaps.get(rel)
-        if (os.name != "nt" and snap is not None
-                and _identity_tuple(info) == snap):
-            continue
+        if snap is not None and _identity_tuple(info) != snap:
+            return False
+        # 快照匹配也不能跳过摘要读取：时间戳可能不足以证明内容没变。
         if _fingerprint(entry_path(base, rel)) != marks.get(rel):
             return False
     return True
@@ -613,9 +613,8 @@ def _write_exclusive(path: str, data: bytes) -> str:
 
 
 def _verified_unlink(path: str, expected_size: int, expected_hash: str,
-                     survivor_check=None):
+                     survivor_check=None, expected_snap=None):
     """打开后核对，再删除。返回 (是否干净删除, 说明)。
-
     POSIX 上先把目录项移入隔离目录并保留保护硬链接；最终校验通过后才
     删除保护链接。校验失败时把原 inode 放回，不依赖可能短写的内容重建。
     """
@@ -646,10 +645,17 @@ def _verified_unlink(path: str, expected_size: int, expected_hash: str,
                 return False, ""
             if info.st_size != expected_size:
                 return False, ""
-            digest = _hash_fd(fd)
-            again = os.fstat(fd)
-            if _identity_tuple(again) != _identity_tuple(info) or digest != expected_hash:
-                return False, ""
+            if expected_snap is not None:
+                # 迁移源已在复制后与目标摘要复核；保留最终哈希作为第二次读取。
+                if _identity_tuple(info) != expected_snap:
+                    return False, ""
+                again = info
+            else:
+                digest = _hash_fd(fd)
+                again = os.fstat(fd)
+                if (_identity_tuple(again) != _identity_tuple(info)
+                        or digest != expected_hash):
+                    return False, ""
             try:
                 named = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
             except OSError:
@@ -699,7 +705,13 @@ def _verified_unlink(path: str, expected_size: int, expected_hash: str,
                 return False, detail
             post = os.fstat(fd)
             swapped = post.st_nlink != 0
-            changed = not _fd_content_holds(fd, fd_snap, expected_hash)
+            if expected_snap is not None:
+                digest = _hash_fd(fd)
+                after_hash = os.fstat(fd)
+                changed = (digest != expected_hash
+                           or _identity_tuple(after_hash) != _identity_tuple(post))
+            else:
+                changed = not _fd_content_holds(fd, fd_snap, expected_hash)
             survivor_ok = True
             if survivor_check is not None:
                 try:
@@ -887,7 +899,8 @@ def _list_remaining(root: str):
 
 
 def _release_manifest(backup: str, manifest: dict, survivor=None,
-                      survivor_snaps=None, survivor_marks=None):
+                      survivor_snaps=None, survivor_marks=None,
+                      backup_snaps=None):
     """只删除清单里、且句柄核对通过的文件。其余留下。"""
     notes = []
     for rel, mark in (manifest or {}).items():
@@ -899,7 +912,9 @@ def _release_manifest(backup: str, manifest: dict, survivor=None,
             snap = (survivor_snaps or {}).get(rel)
             survivor_check = lambda p=survivor_path, s=snap, e=expected: _survivor_still(p, s, e)
         clean, detail = _verified_unlink(
-            os.path.join(backup, rel), size, digest, survivor_check=survivor_check)
+            os.path.join(backup, rel), size, digest,
+            survivor_check=survivor_check,
+            expected_snap=(backup_snaps or {}).get(rel))
         if not clean and detail:
             notes.append(detail)
     if os.path.isdir(backup) and not os.path.islink(backup):
@@ -1036,8 +1051,7 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
         raise MigrateError(f"复制校验失败（robocopy 返回 {rc}），源目录保持原样")
 
     if (not _tree_metadata_still(src, source_sizes, src_snaps)
-            or (os.name == "nt"
-                and not _tree_still_verified(src, dest_marks, src_snaps))):
+            or not _tree_still_verified(src, dest_marks, src_snaps)):
         raise MigrateError("源目录在复制后发生变化，源文件和目标副本都已保留")
     fresh_manifest = {}
     for rel, size in source_sizes.items():
@@ -1067,7 +1081,8 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
             "建立联接失败，源目录已还原，数据未丢失") from exc
     remaining = _release_manifest(
         backup, fresh_manifest, survivor=dest,
-        survivor_snaps=dest_snaps, survivor_marks=dest_marks)
+        survivor_snaps=dest_snaps, survivor_marks=dest_marks,
+        backup_snaps=src_snaps)
     if remaining:
         log(f"备份里还有未删除的内容：{backup}")
         return MigrateResult(src, dest, status="partial", backup=backup, remaining=remaining)
