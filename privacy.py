@@ -252,8 +252,12 @@ def _download_sql(path: str):
 
 
 def _shop_sql():
-    # 域名来自固定列表，不拼接用户输入。
-    likes = " OR ".join([f"url LIKE '%{domain}%'" for domain in SHOP_DOMAINS])
+    return _domain_sql(SHOP_DOMAINS)
+
+
+def _domain_sql(domains):
+    """按域名删掉浏览历史里的访问记录。域名来自固定列表，不拼接用户输入。"""
+    likes = " OR ".join([f"url LIKE '%{domain}%'" for domain in domains])
     return [
         f"DELETE FROM visits WHERE url IN (SELECT id FROM urls WHERE {likes})",
         f"DELETE FROM urls WHERE {likes}",
@@ -392,22 +396,16 @@ def _scan_high(cookie_records):
     money = sum(int(item.get("money") or 0) for item in cookie_records)
     shop = sum(int(item.get("shop") or 0) for item in cookie_records)
     medical = sum(int(item.get("medical") or 0) for item in cookie_records)
-    # 成人内容和密码库不做内容扫描，卡片固定为 0，避免编造条数。
+    # 成人内容、密码泄露、其他敏感信息没有可靠的检测手段，不出卡片，免得显示假的 0 条。
     return [
         {"id": "risk_file", "section": "high", "name": "文件敏感隐私",
          "count": len(sensitive), "files": sensitive, "action": "files"},
-        {"id": "risk_other", "section": "high", "name": "其他敏感隐私",
-         "count": 0, "files": [], "action": "files"},
         {"id": "risk_money", "section": "high", "name": "财产安全隐私",
          "count": money, "files": [], "action": "files"},
         {"id": "risk_shop", "section": "high", "name": "网络购物痕迹",
          "count": shop, "files": [], "action": "files"},
         {"id": "risk_medical", "section": "high", "name": "医疗信息隐私",
          "count": medical, "files": [], "action": "files"},
-        {"id": "risk_adult", "section": "high", "name": "成人敏感隐私",
-         "count": 0, "files": [], "action": "files"},
-        {"id": "risk_leak", "section": "high", "name": "泄露账号密码",
-         "count": 0, "files": [], "action": "files"},
         {"id": "cookies", "section": "high", "name": "Cookie",
          "count": cookies, "files": cookie_files, "action": "files"},
     ]
@@ -565,10 +563,19 @@ def scan(progress=None):
         "id": "shop", "section": "shop", "name": "网络购物记录",
         "count": shop, "files": [], "sql_jobs": sql_shop, "action": "sql",
     })
+    domain_jobs = {"risk_shop": SHOP_DOMAINS, "risk_money": FINANCE_DOMAINS,
+                   "risk_medical": MEDICAL_DOMAINS}
     for record in records:
-        if record.get("id") == "risk_shop":
-            record["action"] = "sql"
-            record["sql_jobs"] = list(sql_shop)
+        domains = domain_jobs.get(record.get("id"))
+        if domains is None:
+            continue
+        jobs = []
+        for item in browsers:
+            for path in item.get("history_files") or []:
+                jobs.append({"browser": item["browser"], "path": path,
+                             "statements": _domain_sql(domains)})
+        record["action"] = "sql"
+        record["sql_jobs"] = jobs
     push("电脑使用痕迹")
     records.extend(_scan_computer())
     push("软件使用痕迹")

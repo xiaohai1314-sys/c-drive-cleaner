@@ -2275,3 +2275,40 @@ def test_ellipsize_middle_keeps_drive_and_tail():
     assert short.endswith("最终文件_t3.dwg")
     assert len(short) < len(path)
     assert look.ellipsize_middle("D:\\a.txt", 400) == "D:\\a.txt"
+
+
+def test_dup_keep_rules():
+    import dupes
+    group = {"files": [r"C:\a\very\deep\x.bin", r"D:\x.bin", r"C:\b\x.bin"],
+             "mtimes": {r"C:\a\very\deep\x.bin": 30, r"D:\x.bin": 10, r"C:\b\x.bin": 20}}
+    try:
+        assert dupes.pick_keeper(group, "newest") == r"C:\a\very\deep\x.bin"
+        assert dupes.pick_keeper(group, "oldest") == r"D:\x.bin"
+        assert dupes.pick_keeper(group, "shortest") == r"D:\x.bin"
+        dupes.set_keep_rule("oldest")
+        assert dupes.auto_select([group]) == {r"C:\a\very\deep\x.bin", r"C:\b\x.bin"}
+        dupes.set_keep_rule("bogus")
+        assert dupes.keep_rule() == "newest"
+    finally:
+        dupes.set_keep_rule("newest")
+
+
+def test_privacy_finance_and_medical_cards_are_cleanable(tmp_path):
+    import sqlite3
+    import privacy
+    db = tmp_path / "History"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE urls (id INTEGER PRIMARY KEY, url TEXT)")
+    conn.execute("CREATE TABLE visits (id INTEGER PRIMARY KEY, url INTEGER)")
+    finance = "https://www.%s/x" % privacy.FINANCE_DOMAINS[0]
+    conn.executemany("INSERT INTO urls (id, url) VALUES (?, ?)", [(1, finance), (2, "https://example.org/")])
+    conn.executemany("INSERT INTO visits (url) VALUES (?)", [(1,), (2,)])
+    conn.commit()
+    conn.close()
+    assert privacy.apply_sql(str(db), privacy._domain_sql(privacy.FINANCE_DOMAINS))
+    conn = sqlite3.connect(db)
+    left = [row[0] for row in conn.execute("SELECT url FROM urls")]
+    conn.close()
+    assert left == ["https://example.org/"]
+    ids = {item["id"] for item in privacy._scan_high([])}
+    assert not ids & {"risk_adult", "risk_leak", "risk_other"}

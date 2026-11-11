@@ -32,17 +32,40 @@ def _sample_hash(path, size, sample=8192):
     return digest.hexdigest()
 
 
-def pick_keeper(group) -> str:
-    """每组留下的那一份：优先修改时间最新，其次路径更短，最后按路径排序。"""
+KEEP_RULES = (
+    ("newest", "保留最新修改"),
+    ("oldest", "保留最早创建"),
+    ("shortest", "保留路径最短"),
+)
+_keep_rule = "newest"
+
+
+def set_keep_rule(rule) -> None:
+    """切换每组保留哪一份。未知规则回到默认的「最新修改」。"""
+    global _keep_rule
+    _keep_rule = rule if rule in {key for key, _label in KEEP_RULES} else "newest"
+
+
+def keep_rule() -> str:
+    return _keep_rule
+
+
+def pick_keeper(group, rule=None) -> str:
+    """每组留下的那一份。
+
+    newest：修改时间最新，其次路径更短；oldest：修改时间最早，其次路径更短；
+    shortest：路径最短，其次修改时间最新。最后都按路径排序，结果稳定。
+    """
     files = list(group.get("files") or [])
     if not files:
         return ""
     mtimes = group.get("mtimes") or {}
-
-    def sort_key(path):
-        return (mtimes.get(path, 0), -len(path), path)
-
-    return max(files, key=sort_key)
+    rule = rule or _keep_rule
+    if rule == "oldest":
+        return min(files, key=lambda path: (mtimes.get(path, 0), len(path), path))
+    if rule == "shortest":
+        return min(files, key=lambda path: (len(path), -mtimes.get(path, 0), path))
+    return max(files, key=lambda path: (mtimes.get(path, 0), -len(path), path))
 
 
 def auto_select(groups) -> set:

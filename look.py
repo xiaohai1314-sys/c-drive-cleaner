@@ -266,12 +266,26 @@ class Tick(object):
         self.widget = tk.Label(master, image=image, bg=bg, bd=0, cursor="hand2")
         self.widget._img = image
         self.widget.bind("<Button-1>", self._click)
+        # 变量被代码改动时（全选、取消勾选）也要重画，不然图标和状态对不上。
+        self._trace = variable.trace_add("write", self._redraw)
+        self.widget.bind("<Destroy>", self._untrace, add="+")
+
+    def _redraw(self, *_args):
+        try:
+            image = checkbox(bool(self.var.get()), self.size)
+            self.widget._img = image
+            self.widget.configure(image=image)
+        except Exception:
+            pass
+
+    def _untrace(self, _event=None):
+        try:
+            self.var.trace_remove("write", self._trace)
+        except Exception:
+            pass
 
     def _click(self, _event=None):
         self.var.set(not bool(self.var.get()))
-        image = checkbox(bool(self.var.get()), self.size)
-        self.widget._img = image
-        self.widget.configure(image=image)
         if self.command:
             self.command()
 
@@ -296,13 +310,16 @@ class FileTable(object):
     HEAD_BG = "#f5f8fb"
 
     def __init__(self, master, headers, on_toggle=None, on_sort=None, on_pick=None,
-                 bg="#f7fbfe", on_header=None, sortable=("size", "mtime", "name")):
+                 bg="#f7fbfe", on_header=None, sortable=("size", "mtime", "name"),
+                 on_menu=None, on_open=None):
         import tkinter as tk
         from tkinter import ttk
         self.on_toggle = on_toggle
         self.on_sort = on_sort
         self.on_pick = on_pick
         self.on_header = on_header
+        self.on_menu = on_menu
+        self.on_open = on_open
         self.sortable = tuple(sortable)
         self.bg = bg
         self.headers = list(headers)
@@ -429,13 +446,21 @@ class FileTable(object):
                     full = row.get("name") or ""
                     name = tk.Label(holder, text=ellipsize_middle(full, self._name_width), bg=bg,
                                     fg="#243140", anchor="w", font=tk_font(9))
+                    if row.get("badge"):
+                        tk.Label(holder, text=row["badge"], bg="#e3f8f0", fg="#14a678", padx=6,
+                                 font=tk_font(8)).pack(side="right", padx=(4, 6))
                     name.pack(side="left", fill="x", expand=True)
                     self._names.append((name, full))
                 else:
-                    text = cells[cell_index][0] if cell_index < len(cells) else ""
+                    cell = cells[cell_index] if cell_index < len(cells) else ("",)
                     cell_index += 1
-                    tk.Label(line, text=text, bg=bg, fg="#5c6b7a", anchor="w",
-                             font=tk_font(9)).grid(row=0, column=column, sticky="we", padx=6)
+                    text = cell[0]
+                    action = cell[2] if len(cell) > 2 else None
+                    label = tk.Label(line, text=text, bg=bg, fg="#1592e6" if action else "#5c6b7a",
+                                     anchor="w", font=tk_font(9), cursor="hand2" if action else "")
+                    label.grid(row=0, column=column, sticky="we", padx=6)
+                    if action:
+                        label.bind("<Button-1>", lambda _e, fn=action: fn())
             if row.get("group_end") and index < len(self._rows) - 1:
                 tk.Frame(self.inner, bg="#dfe8f1", height=1).pack(fill="x")
             hover = "#e7f2fb"
@@ -450,6 +475,15 @@ class FileTable(object):
             line.bind("<Leave>", leave)
             if self.on_pick:
                 line.bind("<Button-1>", lambda _e, key=row.get("id"): self.on_pick(key))
+            if self.on_menu or self.on_open:
+                widgets = [line] + _descendants(line)
+                for widget in widgets:
+                    if isinstance(widget, tk.Label) and str(widget.cget("cursor")) == "hand2":
+                        continue
+                    if self.on_menu:
+                        widget.bind("<Button-3>", lambda event, key=row.get("id"): self.on_menu(key, event))
+                    if self.on_open:
+                        widget.bind("<Double-Button-1>", lambda _e, key=row.get("id"): self.on_open(key))
 
 
 def ellipsize_middle(text, pixels, size=9):
@@ -474,6 +508,14 @@ def ellipsize_middle(text, pixels, size=9):
     return head + "…" + tail
 
 
+def _descendants(widget):
+    out = []
+    for child in widget.winfo_children():
+        out.append(child)
+        out.extend(_descendants(child))
+    return out
+
+
 def _paint(widget, color):
     try:
         widget.configure(bg=color)
@@ -481,3 +523,125 @@ def _paint(widget, color):
         return
     for child in widget.winfo_children():
         _paint(child, color)
+
+
+class Tooltip(object):
+    """鼠标停留 0.5 秒后在指针旁显示说明，移开即消失。"""
+
+    def __init__(self, widget, text_fn, delay=500):
+        self.widget = widget
+        self.text_fn = text_fn if callable(text_fn) else (lambda: text_fn)
+        self.delay = delay
+        self._job = None
+        self._tip = None
+        self.bind(widget)
+
+    def bind(self, widget):
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, event):
+        self._hide()
+        self._job = self.widget.after(self.delay, lambda: self._show(event.x_root, event.y_root))
+
+    def _show(self, x, y):
+        import tkinter as tk
+        text = self.text_fn()
+        if not text:
+            return
+        tip = tk.Toplevel(self.widget)
+        tip.wm_overrideredirect(True)
+        tip.wm_geometry(f"+{x + 12}+{y + 16}")
+        tk.Label(tip, text=text, bg="#ffffff", fg="#243140", justify="left", padx=8, pady=6,
+                 highlightbackground="#c9d6e3", highlightthickness=1, wraplength=360,
+                 font=tk_font(9)).pack()
+        self._tip = tip
+
+    def _hide(self, _event=None):
+        if self._job is not None:
+            try:
+                self.widget.after_cancel(self._job)
+            except Exception:
+                pass
+            self._job = None
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
+
+
+def shell_thumbnail(path, size=90):
+    """用 Windows 资源管理器的缩略图接口取视频等文件的预览帧。非 Windows 或取不到时返回 None。"""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        from PIL import Image
+    except Exception:
+        return None
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                    ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
+
+    class SIZE(ctypes.Structure):
+        _fields_ = [("cx", ctypes.c_long), ("cy", ctypes.c_long)]
+
+    class BITMAP(ctypes.Structure):
+        _fields_ = [("bmType", ctypes.c_long), ("bmWidth", ctypes.c_long), ("bmHeight", ctypes.c_long),
+                    ("bmWidthBytes", ctypes.c_long), ("bmPlanes", ctypes.c_ushort),
+                    ("bmBitsPixel", ctypes.c_ushort), ("bmBits", ctypes.c_void_p)]
+
+    def guid(text):
+        value = GUID()
+        ctypes.oledll.ole32.CLSIDFromString(ctypes.c_wchar_p(text), ctypes.byref(value))
+        return value
+
+    ole32 = ctypes.oledll.ole32
+    try:
+        ole32.CoInitialize(None)
+    except OSError:
+        pass
+    factory = ctypes.c_void_p()
+    iid = guid("{bcc18b79-ba16-442f-80c4-8a59c30c463b}")  # IShellItemImageFactory
+    shell32 = ctypes.windll.shell32
+    shell32.SHCreateItemFromParsingName.argtypes = [wintypes.LPCWSTR, ctypes.c_void_p,
+                                                    ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)]
+    if shell32.SHCreateItemFromParsingName(os.path.abspath(path), None, ctypes.byref(iid),
+                                           ctypes.byref(factory)) != 0 or not factory:
+        return None
+    vtable = ctypes.cast(factory, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+    get_image = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, SIZE, ctypes.c_int,
+                                   ctypes.POINTER(wintypes.HBITMAP))(vtable[3])
+    release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vtable[2])
+    bitmap = wintypes.HBITMAP()
+    try:
+        # SIIGBF_THUMBNAILONLY = 0x8，只要真实缩略图，不要文件类型图标。
+        if get_image(factory, SIZE(size * 2, size * 2), 0x8, ctypes.byref(bitmap)) != 0 or not bitmap:
+            return None
+        gdi32 = ctypes.windll.gdi32
+        info = BITMAP()
+        gdi32.GetObjectW(bitmap, ctypes.sizeof(info), ctypes.byref(info))
+        width, height = info.bmWidth, abs(info.bmHeight)
+        buffer = ctypes.create_string_buffer(width * height * 4)
+        gdi32.GetBitmapBits(bitmap, len(buffer), buffer)
+        image = Image.frombuffer("RGBA", (width, height), buffer.raw, "raw", "BGRA", 0, 1).convert("RGB")
+    except Exception:
+        return None
+    finally:
+        if bitmap:
+            ctypes.windll.gdi32.DeleteObject(bitmap)
+        release(factory)
+    side = min(image.width, image.height)
+    left = (image.width - side) // 2
+    top = (image.height - side) // 2
+    image = image.crop((left, top, left + side, top + side)).resize((size, size))
+    try:
+        weight = os.path.getsize(path)
+    except OSError:
+        weight = 0
+    return _photo(_size_badge(image, weight))
