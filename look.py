@@ -179,10 +179,10 @@ def category_icon(name, checked=False):
     return _cached(("cat", name, checked), draw)
 
 
-def thumb_for(path, size=88):
-    """普通图片，或能还原的微信 .dat。失败返回 None。"""
+def thumb_for(path, size=90, weight=None):
+    """普通图片，或能还原的微信 .dat。铺满裁切成正方形，左下角半透明标出大小。失败返回 None。"""
     import datdecode
-    from PIL import Image, ImageDraw
+    from PIL import Image
     ext = os.path.splitext(path)[1].lower()
     try:
         if ext == ".dat":
@@ -195,18 +195,50 @@ def thumb_for(path, size=88):
         image = image.convert("RGB")
     except Exception:
         return None
-    image.thumbnail((size, size))
-    canvas = Image.new("RGB", (size, size), (236, 242, 248))
-    canvas.paste(image, ((size - image.width) // 2, (size - image.height) // 2))
-    pen = ImageDraw.Draw(canvas)
-    try:
-        weight = os.path.getsize(path)
-    except OSError:
-        weight = 0
-    label = _compact(weight)
-    pen.rectangle((0, size - 16, size, size), fill=(0, 0, 0))
-    pen.text((4, size - 14), label, fill="white", font=_pil_font(10, True))
-    return _photo(canvas)
+    side = min(image.width, image.height)
+    left = (image.width - side) // 2
+    top = (image.height - side) // 2
+    image = image.crop((left, top, left + side, top + side)).resize((size, size))
+    if weight is None:
+        try:
+            weight = os.path.getsize(path)
+        except OSError:
+            weight = 0
+    return _photo(_size_badge(image, weight))
+
+
+def video_tile(weight, size=90):
+    """视频没有可用缩略图时的占位块：深色底、播放三角、左下角大小。"""
+    from PIL import Image, ImageDraw
+    image = Image.new("RGB", (size, size), (52, 64, 80))
+    pen = ImageDraw.Draw(image)
+    cx, cy = size // 2, size // 2 - 6
+    pen.polygon([(cx - 9, cy - 12), (cx - 9, cy + 12), (cx + 13, cy)], fill=(235, 240, 245))
+    return _photo(_size_badge(image, weight))
+
+
+def _size_badge(image, weight):
+    from PIL import Image, ImageDraw
+    base = image.convert("RGBA")
+    layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    pen = ImageDraw.Draw(layer)
+    label = _compact_size(weight)
+    font = _pil_font(10)
+    pen.rectangle((0, base.height - 15, base.width, base.height), fill=(0, 0, 0, 110))
+    pen.text((4, base.height - 14), label, fill=(255, 255, 255, 255), font=font)
+    return Image.alpha_composite(base, layer).convert("RGB")
+
+
+def _compact_size(num):
+    num = int(num or 0)
+    if num < 1024:
+        return f"{num}B"
+    value = float(num)
+    for unit in ("KB", "MB", "GB"):
+        value /= 1024.0
+        if value < 1024:
+            return f"{value:.1f}{unit}"
+    return f"{value:.1f}TB"
 
 
 def _compact(num):
@@ -254,68 +286,161 @@ class Tick(object):
 
 
 class FileTable(object):
-    """自绘文件表：勾选图、图标、斑马纹、悬停。"""
+    """自绘文件表：表头和每一行共用同一套 grid 列宽，保证列对齐。
 
-    def __init__(self, master, headers, on_toggle=None, on_sort=None, on_pick=None, bg="#f7fbfe"):
+    headers: (key, title, width)。key 为 "check" 的列放勾选框，"name" 列放图标和
+    文件名并自动拉伸，其余列固定宽度、左对齐。
+    """
+
+    ROW_HEIGHT = 34
+    HEAD_BG = "#f5f8fb"
+
+    def __init__(self, master, headers, on_toggle=None, on_sort=None, on_pick=None,
+                 bg="#f7fbfe", on_header=None, sortable=("size", "mtime", "name")):
         import tkinter as tk
         from tkinter import ttk
         self.on_toggle = on_toggle
         self.on_sort = on_sort
         self.on_pick = on_pick
+        self.on_header = on_header
+        self.sortable = tuple(sortable)
         self.bg = bg
-        self.headers = headers
+        self.headers = list(headers)
+        self._titles = {key: title for key, title, _w in self.headers}
+        self._sort = (None, True)
         self.frame = tk.Frame(master, bg=bg)
         self.frame.pack(fill="both", expand=True, padx=16, pady=(4, 8))
-        head = tk.Frame(self.frame, bg="#f5f8fb")
-        head.pack(fill="x")
-        for key, title, width in headers:
-            label = tk.Label(head, text=title, bg="#f5f8fb", fg="#5c6b7a", anchor="w",
-                             font=tk_font(9), width=max(4, width // 8))
-            label.pack(side="left", padx=4, pady=6)
-            if on_sort and key in ("size", "mtime", "name"):
+        self.head = tk.Frame(self.frame, bg=self.HEAD_BG, height=32)
+        self.head.pack(fill="x")
+        self.head.pack_propagate(False)
+        self.head_inner = tk.Frame(self.head, bg=self.HEAD_BG)
+        self.head_inner.pack(fill="both", expand=True)
+        self._configure_columns(self.head_inner)
+        self.head_labels = {}
+        self.head_slot = None
+        for column, (key, title, _width) in enumerate(self.headers):
+            if key == "check":
+                slot = tk.Frame(self.head_inner, bg=self.HEAD_BG)
+                slot.grid(row=0, column=column, sticky="w", padx=(4, 0))
+                self.head_slot = slot
+                continue
+            label = tk.Label(self.head_inner, text=title, bg=self.HEAD_BG, fg="#5c6b7a",
+                             anchor="w", font=tk_font(9))
+            label.grid(row=0, column=column, sticky="we", padx=(40 if key == "name" else 6, 6), pady=6)
+            self.head_labels[key] = label
+            if (on_sort and key in self.sortable) or (on_header and key not in self.sortable):
                 label.configure(cursor="hand2")
-                label.bind("<Button-1>", lambda _e, name=key: on_sort(name))
-        canvas = tk.Canvas(self.frame, bg=bg, highlightthickness=0)
-        scroll = ttk.Scrollbar(self.frame, orient="vertical", command=canvas.yview)
+                label.bind("<Button-1>", lambda event, name=key: self._head_click(name, event))
+        body = tk.Frame(self.frame, bg=bg)
+        body.pack(fill="both", expand=True)
+        canvas = tk.Canvas(body, bg=bg, highlightthickness=0)
+        scroll = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
         self.inner = tk.Frame(canvas, bg=bg)
         self.inner.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
         window = canvas.create_window((0, 0), window=self.inner, anchor="nw")
-        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        canvas.bind("<Configure>", lambda event: self._resize(canvas, window, event.width))
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
+        # 表头右侧留出和滚动条一样宽的空位，列才能和下面的行对齐。
+        self._scroll = scroll
+        self._canvas = canvas
         self._rows = []
+        self._names = []
+        self._name_width = 300
+
+    def _configure_columns(self, widget):
+        for column, (key, _title, width) in enumerate(self.headers):
+            if key == "name":
+                widget.grid_columnconfigure(column, weight=1, minsize=width // 2)
+            else:
+                widget.grid_columnconfigure(column, weight=0, minsize=width)
+
+    def _resize(self, canvas, window, width):
+        canvas.itemconfigure(window, width=width)
+        try:
+            pad = max(self._scroll.winfo_width(), self._scroll.winfo_reqwidth())
+        except Exception:
+            pad = 0
+        self.head_inner.pack_configure(padx=(0, pad))
+        fixed = sum(w for key, _t, w in self.headers if key != "name")
+        name_width = max(120, width - fixed - 60)
+        if abs(name_width - self._name_width) > 8:
+            self._name_width = name_width
+            for label, text in self._names:
+                try:
+                    label.configure(text=ellipsize_middle(text, name_width))
+                except Exception:
+                    pass
+
+    def _head_click(self, key, event):
+        if key in self.sortable and self.on_sort:
+            self.on_sort(key)
+        elif self.on_header:
+            self.on_header(key, event)
+
+    def set_header(self, key, text):
+        self._titles[key] = text
+        self._paint_headers()
+
+    def set_sort(self, key, desc=True):
+        self._sort = (key, desc)
+        self._paint_headers()
+
+    def _paint_headers(self):
+        sort_key, desc = self._sort
+        for key, label in self.head_labels.items():
+            text = self._titles.get(key, "")
+            if key == sort_key:
+                text += " ▾" if desc else " ▴"
+            label.configure(text=text, fg="#1592e6" if key == sort_key else "#5c6b7a")
 
     def set_rows(self, rows):
         import tkinter as tk
         for child in self.inner.winfo_children():
             child.destroy()
         self._rows = list(rows or [])
+        self._names = []
         for index, row in enumerate(self._rows):
-            bg = row.get("bg") or ("#f3f8fd" if index % 2 else "#ffffff")
-            line = tk.Frame(self.inner, bg=bg, height=40)
-            line.pack(fill="x", pady=1)
-            line.pack_propagate(False)
+            bg = row.get("bg") or "#ffffff"
+            line = tk.Frame(self.inner, bg=bg, height=self.ROW_HEIGHT)
+            line.pack(fill="x")
+            line.grid_propagate(False)
+            line.grid_rowconfigure(0, weight=1)
+            self._configure_columns(line)
             var = tk.BooleanVar(value=bool(row.get("checked")))
 
             def fire(key=row.get("id"), variable=var):
                 if self.on_toggle:
                     self.on_toggle(key, bool(variable.get()))
 
-            tick = Tick(line, var, command=fire, bg=bg, size=16)
-            tick.pack(side="left", padx=(8, 4))
-            icon = row.get("icon")
-            if icon is not None:
-                tk.Label(line, image=icon, bg=bg).pack(side="left", padx=(2, 6))
-            name = tk.Label(line, text=row.get("name") or "", bg=bg, fg="#243140", anchor="w",
-                            font=tk_font(9))
-            name.pack(side="left", fill="x", expand=True)
-            for text, width in reversed(row.get("cells") or []):
-                tk.Label(line, text=text, bg=bg, fg="#5c6b7a", anchor="e",
-                         font=tk_font(9), width=max(6, width // 8)).pack(side="right", padx=6)
+            cells = list(row.get("cells") or [])
+            cell_index = 0
+            for column, (key, _title, _width) in enumerate(self.headers):
+                if key == "check":
+                    tick = Tick(line, var, command=fire, bg=bg, size=16)
+                    tick.widget.grid(row=0, column=column, sticky="w", padx=(10, 0))
+                elif key == "name":
+                    holder = tk.Frame(line, bg=bg)
+                    holder.grid(row=0, column=column, sticky="we")
+                    icon = row.get("icon")
+                    if icon is not None:
+                        tk.Label(holder, image=icon, bg=bg).pack(side="left", padx=(6, 6))
+                    full = row.get("name") or ""
+                    name = tk.Label(holder, text=ellipsize_middle(full, self._name_width), bg=bg,
+                                    fg="#243140", anchor="w", font=tk_font(9))
+                    name.pack(side="left", fill="x", expand=True)
+                    self._names.append((name, full))
+                else:
+                    text = cells[cell_index][0] if cell_index < len(cells) else ""
+                    cell_index += 1
+                    tk.Label(line, text=text, bg=bg, fg="#5c6b7a", anchor="w",
+                             font=tk_font(9)).grid(row=0, column=column, sticky="we", padx=6)
+            if row.get("group_end") and index < len(self._rows) - 1:
+                tk.Frame(self.inner, bg="#dfe8f1", height=1).pack(fill="x")
             hover = "#e7f2fb"
 
-            def enter(_event, widget=line, base=bg, hot=hover):
+            def enter(_event, widget=line, hot=hover):
                 _paint(widget, hot)
 
             def leave(_event, widget=line, base=bg):
@@ -327,13 +452,32 @@ class FileTable(object):
                 line.bind("<Button-1>", lambda _e, key=row.get("id"): self.on_pick(key))
 
 
+def ellipsize_middle(text, pixels, size=9):
+    """按像素宽度把长路径缩成「C:\\…尾部」，保留盘符和文件名结尾。"""
+    text = str(text or "")
+    try:
+        font = _CACHE.get(("measure", FAMILY, size))
+        if font is None:
+            import tkinter.font as tkfont
+            font = tkfont.Font(family=FAMILY, size=size)
+            _CACHE[("measure", FAMILY, size)] = font
+        measure = font.measure
+    except Exception:
+        def measure(value):
+            return sum(13 if ord(ch) > 0x2E80 else 7 for ch in value)
+    if measure(text) <= pixels:
+        return text
+    head = text[:3] if len(text) > 3 and text[1:3] == ":\\" else ""
+    tail = text[len(head):]
+    while tail and measure(head + "…" + tail) > pixels:
+        tail = tail[1:]
+    return head + "…" + tail
+
+
 def _paint(widget, color):
     try:
         widget.configure(bg=color)
     except Exception:
         return
     for child in widget.winfo_children():
-        try:
-            child.configure(bg=color)
-        except Exception:
-            pass
+        _paint(child, color)

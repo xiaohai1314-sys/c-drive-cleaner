@@ -2265,3 +2265,13 @@ class FragVizTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_ellipsize_middle_keeps_drive_and_tail():
+    import look
+    path = "C:\\" + "很长的目录名" * 20 + "\\最终文件_t3.dwg"
+    short = look.ellipsize_middle(path, 200)
+    assert short.startswith("C:\\…")
+    assert short.endswith("最终文件_t3.dwg")
+    assert len(short) < len(path)
+    assert look.ellipsize_middle("D:\\a.txt", 400) == "D:\\a.txt"

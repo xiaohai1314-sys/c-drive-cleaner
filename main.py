@@ -75,6 +75,7 @@ SIDEBAR = [
     ("shred", "文件粉碎", "粉", "#e74c3c"),
 ]
 
+IM_BULK_KINDS = ("cache", "log")
 BIG_KINDS = ("all", "video", "music", "document", "image", "archive", "other")
 DUP_KINDS = ("video", "music", "document", "image", "archive", "installer", "other")
 
@@ -410,6 +411,30 @@ class App(_TkRoot):
         GreenButton(row, button_text, command).pack(side="right", pady=(4, 0))
         return row
 
+    def _kind_tab(self, parent, label, size_text, active, on_click, tick_var=None, on_tick=None):
+        """类型页签：选中项是蓝色圆角块，其余是正文加灰色小号大小。可选在前面放一个勾选框。"""
+        piece = tk.Frame(parent, bg=WHITE)
+        piece.pack(side="left", padx=(0, 6))
+        if tick_var is not None:
+            look.Tick(piece, tick_var, command=on_tick, bg=WHITE, size=14).pack(side="left", padx=(0, 3))
+        bg = BLUE if active else WHITE
+        inner = tk.Frame(piece, bg=bg, cursor="hand2")
+        inner.pack(side="left")
+        name = tk.Label(inner, text=label, bg=bg, fg="white" if active else TEXT,
+                        font=look.tk_font(10, active), padx=0, pady=4, cursor="hand2")
+        widgets = [inner, name]
+        if size_text:
+            name.pack(side="left", padx=(12 if active else 4, 2))
+            size = tk.Label(inner, text=f"({size_text})", bg=bg, fg="white" if active else MUTED,
+                            font=look.tk_font(9), pady=4, cursor="hand2")
+            size.pack(side="left", padx=(0, 12 if active else 4))
+            widgets.append(size)
+        else:
+            name.pack(side="left", padx=12 if active else 4)
+        for widget in widgets:
+            widget.bind("<Button-1>", lambda _e: on_click())
+        return piece
+
     def _scrollable(self, parent, bg=WHITE):
         canvas = tk.Canvas(parent, bg=bg, highlightthickness=0)
         scroll = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
@@ -422,38 +447,62 @@ class App(_TkRoot):
         scroll.pack(side="right", fill="y")
         return inner
 
+    def _flow(self, grid, cards, cell_width):
+        """按容器实际宽度决定每行放几张卡，窗口缩放时重新排，不会把右侧卡片挤出可视区。"""
+        state = {"columns": 0}
+
+        def layout(_event=None):
+            width = grid.winfo_width()
+            if width <= 1:
+                width = max(grid.winfo_reqwidth(), cell_width)
+            columns = max(1, width // cell_width)
+            if columns == state["columns"]:
+                return
+            state["columns"] = columns
+            for index, card in enumerate(cards):
+                card.grid(row=index // columns, column=index % columns, padx=4, pady=6)
+
+        grid.bind("<Configure>", layout)
+        layout()
+
     def _card_grid(self, parent, cats, checked_set, on_toggle):
         grid = tk.Frame(parent, bg=PAGE)
         grid.pack(fill="x", padx=18, pady=(4, 12))
-        columns = 8
-        for index, cat in enumerate(cats):
-            card = tk.Frame(grid, bg=CARD, highlightbackground="#e7eef5",
-                            highlightthickness=1, width=112, height=132)
-            card.grid(row=index // columns, column=index % columns, padx=6, pady=6)
+        cards = []
+        for cat in cats:
+            card = tk.Frame(grid, bg=PAGE, width=96, height=124)
+            cards.append(card)
             card.pack_propagate(False)
             checked = cat.key in checked_set
             var = tk.BooleanVar(value=checked)
             self._card_vars.append(var)
             art = self._app_icon(cat.name) or look.category_icon(cat.name, False)
             self._photos.append(art)
-            holder = tk.Frame(card, bg=CARD)
-            holder.pack(pady=(8, 0))
-            tk.Label(holder, image=art, bg=CARD).pack()
+            holder = tk.Frame(card, bg=PAGE)
+            holder.pack(pady=(6, 0))
+            tk.Label(holder, image=art, bg=PAGE).pack()
             look.Tick(holder, var, command=lambda c=cat, v=var: on_toggle(c, v.get()),
-                      bg=CARD, size=16).place_over(holder)
-            name = tk.Label(card, text=cat.name, bg=CARD, fg=TEXT,
-                            font=look.tk_font(8), wraplength=100, justify="center")
-            name.pack(pady=(2, 0))
+                      bg=PAGE, size=16).place_over(holder)
+            name = tk.Label(card, text=cat.name, bg=PAGE, fg=TEXT,
+                            font=look.tk_font(9), wraplength=92, justify="center")
+            name.pack(pady=(4, 0))
             Pill(card, self._size_text(cat.key), ORANGE).pack(pady=(2, 6))
+        self._flow(grid, cards, 104)
 
-    def _section_title(self, parent, text, note=""):
+    def _section_title(self, parent, text, note="", extra=None):
         row = tk.Frame(parent, bg=WHITE)
-        row.pack(fill="x", padx=16, pady=(8, 2))
+        row.pack(fill="x", padx=16, pady=(10, 2))
         tk.Label(row, text="● " + text, bg=WHITE, fg=TEXT,
                  font=("Microsoft YaHei UI", 10, "bold")).pack(side="left")
+        extra_label = None
+        if extra is not None:
+            extra_label = tk.Label(row, text=extra, bg=WHITE, fg=ORANGE,
+                                   font=("Microsoft YaHei UI", 9))
+            extra_label.pack(side="left", padx=(10, 0))
         if note:
             tk.Label(row, text=note, bg=WHITE, fg=MUTED,
-                     font=("Microsoft YaHei UI", 9)).pack(side="left", padx=(10, 0))
+                     font=("Microsoft YaHei UI", 9)).pack(side="right", padx=(10, 0))
+        return extra_label
 
     def _make_tree(self, parent, columns):
         frame = tk.Frame(parent, bg=WHITE)
@@ -481,6 +530,10 @@ class App(_TkRoot):
         if len(text) >= 2 and text[1] == ":":
             return text[:2]
         return ""
+
+    def _disk_label(self, path):
+        drive = self._disk_of(path)
+        return drive[:1].upper() + "盘" if drive else ""
 
     def _fmt_time(self, stamp):
         try:
@@ -713,21 +766,35 @@ class App(_TkRoot):
         cats = self._clean_categories()
         recommended = [c for c in cats if not c.requires_confirm and c.tier != categories.DEEP]
         confirm = [c for c in cats if c.requires_confirm or c.tier == categories.DEEP]
-        rec_on = sum(1 for cat in recommended if cat.key in self.selected)
-        self._section_title(self.clean_body, "推荐清理项",
-                            f"已选{rec_on}/{len(recommended)}  系统和软件的垃圾和无用文件，可放心清理")
+        self._clean_sections = []
+        label = self._section_title(self.clean_body, "推荐清理项",
+                                    "系统和软件的垃圾和无用文件，可放心清理",
+                                    extra=self._section_sizes(recommended))
+        self._clean_sections.append((label, recommended))
         self._card_grid(self.clean_body, recommended, self.selected, self._toggle_clean)
         if confirm:
-            conf_on = sum(1 for cat in confirm if cat.key in self.selected)
-            self._section_title(self.clean_body, "谨慎清理项",
-                                f"已选{conf_on}/{len(confirm)}  系统和软件的数据缓存，可按需选择")
+            label = self._section_title(self.clean_body, "谨慎清理项",
+                                        "系统和软件的数据缓存，可按需选择",
+                                        extra=self._section_sizes(confirm))
+            self._clean_sections.append((label, confirm))
             self._card_grid(self.clean_body, confirm, self.selected, self._toggle_clean)
+
+    def _section_sizes(self, cats):
+        def size(cat):
+            item = self.results.get(cat.key)
+            return item[0] if item and item[0] and item[0] > 0 else 0
+        total = sum(size(cat) for cat in cats)
+        chosen = sum(size(cat) for cat in cats if cat.key in self.selected)
+        return f"已选{utils.fmt_size(chosen)}/共{utils.fmt_size(total)}"
 
     def _toggle_clean(self, cat, value):
         if value:
             self.selected.add(cat.key)
         else:
             self.selected.discard(cat.key)
+        for label, cats in getattr(self, "_clean_sections", []):
+            if label is not None:
+                label.configure(text=self._section_sizes(cats))
         self._update_clean_head()
 
     def _update_clean_head(self):
@@ -927,13 +994,11 @@ class App(_TkRoot):
             self._section_title(body, f"{title}（共{section_count}条）", note)
             grid = tk.Frame(body, bg=WHITE)
             grid.pack(fill="x", padx=14, pady=(2, 8))
-            for index, item in enumerate(items):
-                self._privacy_card(grid, item, index)
+            cards = [self._privacy_card(grid, item, index) for index, item in enumerate(items)]
+            self._flow(grid, cards, 104)
 
     def _privacy_card(self, grid, item, index):
-        card = tk.Frame(grid, bg=CARD, highlightbackground="#e7eef5", highlightthickness=1,
-                        width=120, height=132)
-        card.grid(row=index // 6, column=index % 6, padx=6, pady=6)
+        card = tk.Frame(grid, bg=WHITE, width=96, height=124)
         card.pack_propagate(False)
         selectable = privacy.is_selectable(item)
         var = tk.BooleanVar(value=selectable and item["id"] in self.privacy_selected)
@@ -942,16 +1007,17 @@ class App(_TkRoot):
             self.privacy_selected.discard(item["id"])
         art = look.category_icon(item.get("name", "项"), False)
         self._photos.append(art)
-        holder = tk.Frame(card, bg=CARD)
-        holder.pack(pady=(8, 0))
-        tk.Label(holder, image=art, bg=CARD).pack()
+        holder = tk.Frame(card, bg=WHITE)
+        holder.pack(pady=(6, 0))
+        tk.Label(holder, image=art, bg=WHITE).pack()
         if selectable:
             look.Tick(holder, var, command=lambda i=item["id"], v=var: self._toggle_privacy(i, v.get()),
-                      bg=CARD, size=16).place_over(holder)
-        tk.Label(card, text=item.get("name", ""), bg=CARD, fg=TEXT,
-                 font=look.tk_font(8), wraplength=108, justify="center").pack()
+                      bg=WHITE, size=16).place_over(holder)
+        tk.Label(card, text=item.get("name", ""), bg=WHITE, fg=TEXT,
+                 font=look.tk_font(9), wraplength=92, justify="center").pack(pady=(4, 0))
         count = int(item.get("count") or 0)
         Pill(card, f"{count} 条", ORANGE if count else GREEN).pack(pady=(2, 4))
+        return card
 
     def _toggle_privacy(self, key, value):
         if value:
@@ -1002,30 +1068,37 @@ class App(_TkRoot):
         self.big_sub = tk.Label(parent, text="扫描磁盘中的大文件（>100 MB），删除前会先预览，默认移到回收站",
                                 bg=WHITE, fg=MUTED, font=("Microsoft YaHei UI", 9))
         self.big_sub.pack(anchor="w", padx=18)
+        # 参考图里大文件页固定扫全部磁盘，磁盘筛选放在表头「磁盘：全部 ▾」里。
         self.big_scope = tk.StringVar(value="全部磁盘")
-        self._drive_tabs(parent, ["全部磁盘"] + utils.fixed_drives(),
-                         self.big_scope, self._rescan_big)
-        tabs = tk.Frame(parent, bg=WHITE)
-        tabs.pack(fill="x", padx=18, pady=(8, 0))
-        self.big_tab_labels = {}
-        for key in BIG_KINDS:
-            label = tk.Label(tabs, text=key, bg=WHITE, fg=TEXT, padx=8, pady=4, cursor="hand2",
-                             font=("Microsoft YaHei UI", 9))
-            label.pack(side="left", padx=(0, 4))
-            label.bind("<Button-1>", lambda _e, value=key: self._set_big_type(value))
-            self.big_tab_labels[key] = label
-        filt = tk.Frame(parent, bg=PAGE)
-        filt.pack(fill="x", padx=18, pady=(6, 0))
-        tk.Label(filt, text="磁盘", bg=PAGE, fg=MUTED, font=look.tk_font(9)).pack(side="left")
+        self.big_tabs = tk.Frame(parent, bg=WHITE)
+        self.big_tabs.pack(fill="x", padx=18, pady=(12, 0))
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=18, pady=(6, 0))
+        self.big_tab_labels = {key: None for key in BIG_KINDS}
         self.big_disk_filter = tk.StringVar(value="全部")
-        tk.OptionMenu(filt, self.big_disk_filter, "全部", "C:", "D:", "E:", "F:",
-                      command=lambda _value: self._render_big()).pack(side="left", padx=6)
         self.big_table = look.FileTable(
             parent,
-            (("check", "", 36), ("name", "文件名称", 420), ("disk", "磁盘", 70),
-             ("size", "文件大小", 100), ("mtime", "修改时间", 150)),
-            on_toggle=self._toggle_big_path, on_sort=self._sort_big, bg=PAGE)
+            (("check", "", 40), ("name", "文件名称", 420), ("disk", "磁盘：全部 ▾", 110),
+             ("size", "文件大小", 100), ("mtime", "修改时间", 140)),
+            on_toggle=self._toggle_big_path, on_sort=self._sort_big, bg=PAGE,
+            on_header=self._big_disk_menu)
+        self.big_table.set_sort(self.big_sort_key, self.big_sort_desc)
         self.big_tree = None
+
+    def _big_disk_menu(self, key, event):
+        if key != "disk":
+            return
+        menu = tk.Menu(self, tearoff=0)
+        disks = sorted({self._disk_of(row[0]).upper() for row in self.big_rows if self._disk_of(row[0])})
+        for value in ["全部"] + disks:
+            menu.add_command(label=value if value == "全部" else value[:1] + "盘",
+                             command=lambda v=value: self._set_big_disk(v))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _set_big_disk(self, value):
+        self.big_disk_filter.set(value)
+        shown = "全部" if value == "全部" else value[:1] + "盘"
+        self.big_table.set_header("disk", f"磁盘：{shown} ▾")
+        self._render_big()
 
     def _set_big_type(self, key):
         self.big_type = key
@@ -1094,12 +1167,15 @@ class App(_TkRoot):
             totals[self._big_kind(path)] = totals.get(self._big_kind(path), 0) + size
         names = {"all": "全部", "video": "视频", "music": "音乐", "document": "文档",
                  "image": "图片", "archive": "压缩包", "other": "其他"}
-        for key, label in self.big_tab_labels.items():
-            text = f"{names.get(key, key)}({utils.fmt_size_compact(totals.get(key, 0))})"
-            if key == self.big_type:
-                label.configure(text=text, bg=BLUE, fg="white")
-            else:
-                label.configure(text=text, bg=PAGE, fg=TEXT)
+        for child in self.big_tabs.winfo_children():
+            child.destroy()
+        for key in BIG_KINDS:
+            size_text = utils.fmt_size(totals.get(key, 0)).replace(" ", "")
+            if key == "all":
+                size_text = ""
+            self._kind_tab(self.big_tabs, names.get(key, key), size_text, key == self.big_type,
+                           lambda value=key: self._set_big_type(value))
+        self.big_table.set_sort(self.big_sort_key, self.big_sort_desc)
         disk_filter = self.big_disk_filter.get() if getattr(self, "big_disk_filter", None) else "全部"
         visible = []
         for path, size, mtime in self.big_rows:
@@ -1126,7 +1202,7 @@ class App(_TkRoot):
                 "checked": path in self.big_checked,
                 "icon": self._kind_icon(path),
                 "name": path,
-                "cells": [(self._disk_of(path), 70), (utils.fmt_size(size), 100),
+                "cells": [(self._disk_label(path), 110), (utils.fmt_size(size), 100),
                           (self._fmt_time(mtime), 140)],
             })
         self.big_table.set_rows(table_rows)
@@ -1326,28 +1402,55 @@ class App(_TkRoot):
         self.dup_scope = tk.StringVar(value="全部磁盘")
         self._drive_tabs(parent, ["全部磁盘", "用户目录"] + utils.fixed_drives(),
                          self.dup_scope, self._rescan_dup)
-        tabs = tk.Frame(parent, bg=WHITE)
-        tabs.pack(fill="x", padx=18, pady=(8, 0))
+        self.dup_tabs = tk.Frame(parent, bg=WHITE)
+        self.dup_tabs.pack(fill="x", padx=18, pady=(10, 0))
+        tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", padx=18, pady=(6, 0))
         self.dup_tab_vars = {}
-        labels = {"video": "视频", "music": "音乐", "document": "文档", "image": "图片",
-                  "archive": "压缩包", "installer": "安装包", "other": "其他"}
         for key in DUP_KINDS:
             var = tk.BooleanVar(value=True)
             self._card_vars.append(var)
             self.dup_tab_vars[key] = var
-            look.Tick(tabs, var, command=lambda: self.after(1, self._render_dup),
-                      bg=PAGE, size=16).pack(side="left", padx=(8, 0))
-            tk.Label(tabs, text=labels[key], bg=PAGE, fg=TEXT, font=look.tk_font(9)).pack(side="left", padx=(2, 8))
-        clear = tk.Label(tabs, text="取消勾选", bg=BLUE_BG, fg="#1592e6", padx=10, pady=3,
-                         cursor="hand2", font=look.tk_font(9))
-        clear.pack(side="right")
-        clear.bind("<Button-1>", lambda _e: self._dup_clear())
         self.dup_table = look.FileTable(
             parent,
-            (("check", "", 36), ("name", "文件名称", 520), ("size", "文件大小", 110),
-             ("mtime", "修改时间", 150)),
+            (("check", "", 90), ("name", "文件名称", 500), ("size", "文件大小", 110),
+             ("mtime", "修改时间", 140)),
             on_toggle=self._toggle_dup_path, on_sort=self._sort_dup, bg=PAGE)
+        clear = tk.Label(self.dup_table.head_slot, text="取消勾选", bg=BLUE_BG, fg="#1592e6",
+                         padx=8, pady=2, cursor="hand2", font=look.tk_font(9))
+        clear.pack(side="left")
+        clear.bind("<Button-1>", lambda _e: self._dup_clear())
+        self.dup_table.set_sort(self.dup_sort_key, self.dup_sort_desc)
         self.dup_tree = None
+
+    def _render_dup_tabs(self):
+        tabs = getattr(self, "dup_tabs", None)
+        if tabs is None:
+            return
+        for child in tabs.winfo_children():
+            child.destroy()
+        labels = {"video": "视频", "music": "音乐", "document": "文档", "image": "图片",
+                  "archive": "压缩包", "installer": "安装包", "other": "其他"}
+        sizes = {key: 0 for key in DUP_KINDS}
+        for group in self.dup_groups:
+            kind = self._group_kind(group)
+            sizes[kind] = sizes.get(kind, 0) + group["size"] * max(len(group["files"]) - 1, 0)
+        all_on = all(var.get() for var in self.dup_tab_vars.values())
+        self._kind_tab(tabs, "全部", "", all_on, self._dup_toggle_all)
+        for key in DUP_KINDS:
+            var = self.dup_tab_vars[key]
+            self._kind_tab(tabs, labels[key], utils.fmt_size(sizes.get(key, 0)).replace(" ", ""),
+                           False, lambda v=var: self._dup_flip_kind(v),
+                           tick_var=var, on_tick=lambda: self.after(1, self._render_dup))
+
+    def _dup_toggle_all(self):
+        turn_on = not all(var.get() for var in self.dup_tab_vars.values())
+        for var in self.dup_tab_vars.values():
+            var.set(turn_on)
+        self._render_dup()
+
+    def _dup_flip_kind(self, var):
+        var.set(not var.get())
+        self._render_dup()
 
     def _dup_clear(self):
         self.dup_checked = set()
@@ -1444,7 +1547,8 @@ class App(_TkRoot):
         rows = []
         for group_index, group in enumerate(shown):
             tint = "#e7f3ff" if group_index % 2 == 0 else "#fff6e8"
-            for path in group.get("files") or []:
+            files = group.get("files") or []
+            for position, path in enumerate(files):
                 mtime = (group.get("mtimes") or {}).get(path, 0)
                 rows.append({
                     "id": path,
@@ -1452,10 +1556,13 @@ class App(_TkRoot):
                     "icon": self._kind_icon(path),
                     "name": path,
                     "bg": tint,
+                    "group_end": position == len(files) - 1,
                     "cells": [(utils.fmt_size(group.get("size") or 0), 110),
                               (self._fmt_time(mtime), 140)],
                 })
         table.set_rows(rows)
+        table.set_sort(self.dup_sort_key, self.dup_sort_desc)
+        self._render_dup_tabs()
         self._refresh_dup_head()
 
     def _refresh_dup_head(self):
@@ -1572,24 +1679,21 @@ class App(_TkRoot):
                 name = "微信" if key == "wechat" else "QQ"
                 sub.configure(text=f"已选择 {len(chosen)} 个{name}文件，合计 {utils.fmt_size(chosen_size)}")
         tabs = tk.Frame(body, bg=WHITE)
-        tabs.pack(fill="x", padx=16, pady=(8, 4))
+        tabs.pack(fill="x", padx=16, pady=(10, 0))
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(6, 8))
         current = self.im_tab.get(key) or self._im_tabs(key)[0][0]
         for kind, label in self._im_tabs(key):
             subset = [item for item in files if item["kind"] == kind]
             size = sum(item["size"] for item in subset)
-            all_on = bool(subset) and all(item["path"] in checked for item in subset)
-            piece = tk.Frame(tabs, bg=WHITE)
-            piece.pack(side="left", padx=(0, 8))
-            var = tk.BooleanVar(value=all_on)
-            self._card_vars.append(var)
-            tk.Checkbutton(piece, variable=var, bg=WHITE, activebackground=WHITE, bd=0,
-                           command=lambda k=key, kd=kind, v=var: self._toggle_im_kind(k, kd, v.get())).pack(side="left")
-            active = kind == current
-            name = tk.Label(piece, text=f"{label}({utils.fmt_size_compact(size)})",
-                            bg=BLUE if active else WHITE, fg="white" if active else TEXT,
-                            padx=8, pady=3, cursor="hand2", font=("Microsoft YaHei UI", 9))
-            name.pack(side="left")
-            name.bind("<Button-1>", lambda _e, k=key, kd=kind: self._set_im_tab(k, kd))
+            # 参考图里只有缓存、日志这类可整类清理的页签前带勾选框，媒体按月在分组里勾。
+            var = None
+            if kind in IM_BULK_KINDS:
+                var = tk.BooleanVar(value=bool(subset) and all(item["path"] in checked for item in subset))
+                self._card_vars.append(var)
+            self._kind_tab(tabs, label, utils.fmt_size(size).replace(" ", ""), kind == current,
+                           lambda k=key, kd=kind: self._set_im_tab(k, kd), tick_var=var,
+                           on_tick=(lambda k=key, kd=kind, v=var: self._toggle_im_kind(k, kd, v.get()))
+                           if var is not None else None)
         shown = [item for item in files if item["kind"] == current]
         if current == "file":
             self._render_received(body, key, shown)
@@ -1629,17 +1733,17 @@ class App(_TkRoot):
         for month in months:
             items = groups[month]
             label = items[0]["month_label"]
-            self._group_header(body, key, label, items)
-            if (key, month) not in self.im_open:
+            content = self._group_header(body, key, label, items, opened=(key, month) in self.im_open)
+            if content is None:
                 continue
-            limit = self.im_limits.get((key, month), 8)
+            limit = self.im_limits.get((key, month), 12)
             visible = items[:limit]
             if kind in ("image", "video", "sns"):
-                self._thumb_grid(body, key, visible)
+                self._thumb_grid(content, key, visible)
             else:
-                self._file_lines(body, key, visible)
+                self._file_lines(content, key, visible)
             if len(items) > limit:
-                more = tk.Label(body, text="点击查看更多", bg=WHITE, fg=BLUE, cursor="hand2",
+                more = tk.Label(content, text="点击查看更多", bg=CARD, fg=MUTED, cursor="hand2",
                                 font=("Microsoft YaHei UI", 9))
                 more.pack(pady=(2, 8))
                 more.bind("<Button-1>", lambda _e, k=key, m=month: self._im_more(k, m))
@@ -1647,32 +1751,52 @@ class App(_TkRoot):
     def _render_received(self, body, key, files):
         for sub, label in imclean.FILE_SUBS:
             items = [item for item in files if item.get("sub") == sub]
-            self._group_header(body, key, label, items, group_id=("file", sub))
-            if (key, "file", sub) not in self.im_open:
+            content = self._group_header(body, key, label, items, group_id=("file", sub),
+                                         opened=(key, "file", sub) in self.im_open)
+            if content is None:
                 continue
             limit = self.im_limits.get((key, "file", sub), 12)
-            self._file_lines(body, key, items[:limit])
+            self._file_lines(content, key, items[:limit])
             if len(items) > limit:
-                more = tk.Label(body, text="点击查看更多", bg=WHITE, fg=BLUE, cursor="hand2")
+                more = tk.Label(content, text="点击查看更多", bg=CARD, fg=MUTED, cursor="hand2")
                 more.pack()
                 more.bind("<Button-1>", lambda _e, k=key, s=sub: self._im_more(k, ("file", s)))
 
-    def _group_header(self, body, key, label, items, group_id=None):
+    def _group_header(self, body, key, label, items, group_id=None, opened=False):
+        """一组（某月或某类接收文件）是一张圆角卡：卡头勾选、标题、大小，展开后内容也在卡里。
+
+        展开时返回卡内的内容容器，收起时返回 None。
+        """
         size = sum(item["size"] for item in items)
         paths = [item["path"] for item in items]
         checked = self.im_checked_paths[key]
-        row = tk.Frame(body, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
-        row.pack(fill="x", padx=16, pady=4)
+        card = tk.Frame(body, bg=CARD, highlightbackground="#dfe7ef", highlightthickness=1)
+        card.pack(fill="x", padx=16, pady=(0, 10))
+        row = tk.Frame(card, bg=CARD, height=48)
+        row.pack(fill="x")
+        row.pack_propagate(False)
         var = tk.BooleanVar(value=bool(paths) and all(path in checked for path in paths))
         self._card_vars.append(var)
-        tk.Checkbutton(row, variable=var, bg=WHITE, activebackground=WHITE, bd=0,
-                       command=lambda p=paths, v=var: self._toggle_im_paths(key, p, v.get())).pack(side="left", padx=6)
-        title = tk.Label(row, text=label, bg=WHITE, fg=TEXT, cursor="hand2",
-                         font=("Microsoft YaHei UI", 10))
-        title.pack(side="left", padx=4, pady=8)
-        tk.Label(row, text=utils.fmt_size(size), bg=WHITE, fg=MUTED).pack(side="right", padx=12)
+        look.Tick(row, var, command=lambda p=paths, v=var: self._toggle_im_paths(key, p, v.get()),
+                  bg=CARD, size=16).pack(side="left", padx=(16, 10))
+        # 标题定宽，大小紧跟在标题后面（参考图大小在卡头中部，不是贴最右）。
+        title = tk.Label(row, text=label, bg=CARD, fg=TEXT, cursor="hand2", anchor="w",
+                         width=26, font=("Microsoft YaHei UI", 10))
+        title.pack(side="left")
+        tk.Label(row, text=utils.fmt_size(size), bg=CARD, fg=TEXT,
+                 font=("Microsoft YaHei UI", 10)).pack(side="left", padx=(8, 0))
+        arrow = tk.Label(row, text="收起" if opened else "展开", bg=CARD, fg=MUTED, cursor="hand2",
+                         font=look.tk_font(9))
+        arrow.pack(side="right", padx=14)
         token = group_id if group_id is not None else (items[0]["month"] if items else label)
-        title.bind("<Button-1>", lambda _e, k=key, token=token: self._toggle_open(k, token))
+        for widget in (title, arrow):
+            widget.bind("<Button-1>", lambda _e, k=key, token=token: self._toggle_open(k, token))
+        if not opened:
+            return None
+        tk.Frame(card, bg="#e8eef4", height=1).pack(fill="x")
+        content = tk.Frame(card, bg=CARD)
+        content.pack(fill="x", pady=(8, 4))
+        return content
 
     def _toggle_open(self, key, token):
         marker = (key, token) if not isinstance(token, tuple) else (key,) + tuple(token)
@@ -1695,51 +1819,55 @@ class App(_TkRoot):
     def _file_lines(self, body, key, items):
         checked = self.im_checked_paths[key]
         for item in items:
-            row = tk.Frame(body, bg=WHITE)
-            row.pack(fill="x", padx=28, pady=1)
+            row = tk.Frame(body, bg=CARD, height=32)
+            row.pack(fill="x", padx=(16, 12))
+            row.pack_propagate(False)
             var = tk.BooleanVar(value=item["path"] in checked)
             self._card_vars.append(var)
-            tk.Checkbutton(row, variable=var, bg=WHITE, bd=0,
-                           command=lambda p=item["path"], v=var: self._toggle_im_paths(key, [p], v.get())).pack(side="left")
-            tk.Label(row, text=item["name"], bg=WHITE, fg=TEXT, anchor="w").pack(side="left", padx=4)
-            tk.Label(row, text=self._fmt_time(item["mtime"]), bg=WHITE, fg=MUTED).pack(side="right", padx=8)
-            tk.Label(row, text=utils.fmt_size(item["size"]), bg=WHITE, fg=MUTED).pack(side="right")
+            look.Tick(row, var, command=lambda p=item["path"], v=var: self._toggle_im_paths(key, [p], v.get()),
+                      bg=CARD, size=14).pack(side="left", padx=(0, 6))
+            icon = self._kind_icon(item["path"])
+            if icon is not None:
+                tk.Label(row, image=icon, bg=CARD).pack(side="left", padx=(0, 6))
+            tk.Label(row, text=self._fmt_time(item["mtime"]), bg=CARD, fg=MUTED, width=16,
+                     anchor="w", font=look.tk_font(9)).pack(side="right")
+            tk.Label(row, text=utils.fmt_size(item["size"]), bg=CARD, fg=MUTED, width=10,
+                     anchor="w", font=look.tk_font(9)).pack(side="right", padx=(0, 8))
+            tk.Label(row, text=look.ellipsize_middle(item["name"], 420), bg=CARD, fg=TEXT,
+                     anchor="w", font=look.tk_font(9)).pack(side="left", fill="x", expand=True)
 
     def _thumb_grid(self, body, key, items):
-        wrap = tk.Frame(body, bg=WHITE)
-        wrap.pack(fill="x", padx=24, pady=4)
+        wrap = tk.Frame(body, bg=CARD)
+        wrap.pack(fill="x", padx=24, pady=(4, 4))
         checked = self.im_checked_paths[key]
-        for index, item in enumerate(items):
-            cell = tk.Frame(wrap, bg=WHITE, width=96, height=120)
-            cell.grid(row=index // 6, column=index % 6, padx=4, pady=4)
+        cells = []
+        for item in items:
+            cell = tk.Frame(wrap, bg=CARD, width=104, height=118)
             cell.pack_propagate(False)
+            cells.append(cell)
             var = tk.BooleanVar(value=item["path"] in checked)
             self._card_vars.append(var)
-            photo = self._load_thumb(item["path"])
-            if photo is not None:
-                holder = tk.Frame(cell, bg=CARD)
-                holder.pack()
-                tk.Label(holder, image=photo, bg=CARD).pack()
-                look.Tick(holder, var, command=lambda p=item["path"], v=var: self._toggle_im_paths(key, [p], v.get()),
-                          bg=CARD, size=14).place_over(holder)
-            else:
-                box = tk.Canvas(cell, width=72, height=54, bg="#d9e7f5", highlightthickness=0)
-                box.pack()
-                box.create_text(36, 27, text=utils.fmt_size_compact(item["size"]), fill=TEXT,
-                                font=("Microsoft YaHei UI", 8))
-                look.Tick(cell, var, command=lambda p=item["path"], v=var: self._toggle_im_paths(key, [p], v.get()),
-                          bg=WHITE, size=14).pack(anchor="w")
-            tk.Label(cell, text=item["name"][:12], bg=WHITE, fg=MUTED,
-                     font=("Microsoft YaHei UI", 7)).pack()
+            photo = self._load_thumb(item["path"], item.get("size"))
+            if photo is None:
+                photo = look.video_tile(item.get("size"), 90)
+                self._photos.append(photo)
+            holder = tk.Frame(cell, bg=CARD)
+            holder.pack(pady=(2, 0))
+            tk.Label(holder, image=photo, bg=CARD, bd=0).pack()
+            look.Tick(holder, var, command=lambda p=item["path"], v=var: self._toggle_im_paths(key, [p], v.get()),
+                      bg=CARD, size=14).place_over(holder)
+            tk.Label(cell, text=look.ellipsize_middle(item["name"], 92, size=8), bg=CARD, fg=TEXT,
+                     font=("Microsoft YaHei UI", 8)).pack(pady=(2, 0))
+        self._flow(wrap, cells, 112)
 
-    def _load_thumb(self, path):
+    def _load_thumb(self, path, weight=None):
         key = "thumb:" + path
         cached = self._icon_cache.get(key)
         if cached is not None:
             return cached or None
         photo = None
         try:
-            photo = look.thumb_for(path, 88)
+            photo = look.thumb_for(path, 90, weight)
         except Exception:
             photo = None
         self._icon_cache[key] = photo or False
