@@ -629,7 +629,7 @@ class App(_TkRoot):
         except OSError:
             pass
 
-    def _confirm_paths(self, paths, title, note):
+    def _confirm_paths(self, paths, title, note, show_size=True):
         paths = list(paths or [])
         if not paths:
             messagebox.showinfo("提示", "没有可处理的文件。")
@@ -641,13 +641,17 @@ class App(_TkRoot):
         dialog.geometry("560x420")
         tk.Label(dialog, text=note, bg=WHITE, fg=TEXT, justify="left", wraplength=520,
                  font=("Microsoft YaHei UI", 10)).pack(anchor="w", padx=16, pady=(14, 4))
-        total = 0
-        for path in paths:
-            try:
-                total += os.path.getsize(path)
-            except OSError:
-                pass
-        tk.Label(dialog, text=f"共 {len(paths)} 个，约 {utils.fmt_size(total)}",
+        if show_size:
+            total = 0
+            for path in paths:
+                try:
+                    total += os.path.getsize(path)
+                except OSError:
+                    pass
+            summary = f"共 {len(paths)} 个，约 {utils.fmt_size(total)}"
+        else:
+            summary = f"共 {len(paths)} 个"
+        tk.Label(dialog, text=summary,
                  bg=WHITE, fg=RED, font=("Microsoft YaHei UI", 10, "bold")).pack(anchor="w", padx=16)
         box = tk.Text(dialog, height=14, bg="#f7f9fc", relief="flat",
                       font=("Microsoft YaHei UI", 9))
@@ -679,6 +683,31 @@ class App(_TkRoot):
         dialog.grab_set()
         dialog.wait_window()
         return result["ok"]
+
+    def _confirm_leftover_items(self, chosen):
+        """残留类（目录/注册表）逐项列表确认：判定只是启发式，删前必须让
+        用户看到每一个具体条目；在列表框点取消就剔除该类，其余类别照常。"""
+        kept = []
+        for cat in chosen:
+            if cat.key == "app_leftovers":
+                ok = self._confirm_paths(
+                    list(cat.paths or []), "确认卸载残留目录",
+                    "以下目录在已安装软件里找不到对应项，将整体移到回收站"
+                    "（可恢复）。\n请逐个核对，认出还在用的软件就点取消。")
+            elif cat.kind == "regleftover":
+                display = [str(entry).replace("::", "\\", 1)
+                           for entry in cat.paths or []]
+                ok = self._confirm_paths(
+                    display, "确认注册表残留键",
+                    "以下注册表键在已安装软件里找不到对应项，删除时会递归"
+                    "删除整棵键树（删前自动导出 .reg 备份）。\n请逐个核对，"
+                    "认出还在用的软件就点取消。",
+                    show_size=False)
+            else:
+                ok = True
+            if ok:
+                kept.append(cat)
+        return kept
 
     def _show_text_file(self, path):
         window = tk.Toplevel(self)
@@ -2347,15 +2376,20 @@ class App(_TkRoot):
         if not chosen:
             messagebox.showinfo("提示", "请先勾选要清理的项目。")
             return
+        chosen = self._confirm_leftover_items(chosen)
+        if not chosen:
+            messagebox.showinfo("提示", "没有可清理的项目。")
+            return
         lines = [f"即将清理 {len(chosen)} 项：", ""]
         for cat in chosen:
             lines.append(f"· {cat.name}  {self._size_text(cat.key)}")
         deep = [c for c in chosen if c.requires_confirm]
         if deep:
             lines.append("")
-            lines.append("以下操作不可恢复：")
+            lines.append("以下操作请确认：")
             for cat in deep:
-                lines.append(f"· {cat.name}：{cat.warning or cat.note or cat.describe}")
+                suffix = "（移到回收站，可恢复）" if getattr(cat, "recycle", False) else ""
+                lines.append(f"· {cat.name}：{cat.warning or cat.note or cat.describe}{suffix}")
         lines.extend(["", "确定继续？"])
         if self._cleaning:
             return
@@ -2370,6 +2404,10 @@ class App(_TkRoot):
             messagebox.showinfo("提示", "没有可清理的项目。")
             return
         if self._cleaning:
+            return
+        chosen = self._confirm_leftover_items(chosen)
+        if not chosen:
+            messagebox.showinfo("提示", "没有可清理的项目。")
             return
         if not messagebox.askyesno("确认清理", "确定清理这些项目？", icon="warning"):
             return

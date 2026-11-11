@@ -5,6 +5,7 @@ import stat
 import subprocess
 import time
 
+import recyclebin
 import safepath
 import scanner
 from utils import (fmt_size, is_runtime_path, is_within, norm_path,
@@ -73,7 +74,13 @@ def _clean_reg_leftovers(cat, result, log):
             result.deleted += 1
         else:
             result.skipped += 1
-            result.errors.append(f"删除失败：{hive}\\{rel}")
+            # 删除可能已删掉一半：立刻用刚导出的 .reg 回滚，避免半删除状态。
+            if registry.restore_backup(hive, rel):
+                result.errors.append(f"删除未完成，已从备份恢复：{hive}\\{rel}")
+            else:
+                backup_file = registry.backup_file_for(hive, rel)
+                result.errors.append(
+                    f"删除未完成且自动恢复失败，请手动导入备份还原：{backup_file}")
     info = registry.last_backup_info()
     if info.get("dir"):
         log(f"    注册表备份在 {info['dir']}")
@@ -106,7 +113,50 @@ def clean_category(cat, log=lambda message: None):
     return _clean_files(cat, result, log)
 
 
+def _recycle_roots(cat, result, log):
+    """把握不高的类别（如卸载残留目录）：整目录送回收站，不做永久删除。
+
+    送走之前仍过全部硬性检查：重解析点、永不清理名单、受保护路径。
+    """
+    untrusted = bool(getattr(cat, "untrusted", False))
+    for root in cat.paths or []:
+        if safepath.is_reparse_point(root) or os.path.islink(root):
+            result.skipped += 1
+            continue
+        if not os.path.lexists(root):
+            continue
+        if safepath.execution_forbidden(root, untrusted=untrusted):
+            result.skipped += 1
+            continue
+        size = 0
+        count = 0
+        if os.path.isfile(root):
+            try:
+                size = os.path.getsize(root)
+            except OSError:
+                size = 0
+            count = 1
+        else:
+            for entry in walk_files(root):
+                count += 1
+                try:
+                    size += entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+        failed = recyclebin.send_to_recycle([root])
+        if failed:
+            result.skipped += 1
+            result.errors.append(f"送回收站失败，已保留：{root}")
+            continue
+        result.deleted += count
+        result.freed += size
+        log(f"    已移到回收站：{root}")
+    return result
+
+
 def _clean_files(cat, result, log):
+    if getattr(cat, "recycle", False):
+        return _recycle_roots(cat, result, log)
     allowed = [norm_path(path) for path in cat.paths]
     untrusted = bool(getattr(cat, "untrusted", False))
 
@@ -121,8 +171,10 @@ def _clean_files(cat, result, log):
             continue
         for entry in walk_files(root):
             _delete_file(entry.path, allowed, cat.patterns, result, untrusted, cat)
-        if cat.prune_dirs:
-            removed = remove_empty_dirs(root)
+        if cat.prune_dirs and not safepath.is_never_clean(root):
+            # 空目录裁剪同样受永不清理硬名单约束：文件删不掉的区域，
+            # 它的空子目录也不许摘。
+            removed = remove_empty_dirs(root, skip=safepath.is_never_clean)
             if removed:
                 log(f"    移除空目录 {removed} 个")
 
@@ -147,7 +199,9 @@ def _delete_file(path, allowed, patterns, result, untrusted=False, cat=None):
         try:
             mtime = os.path.getmtime(path)
         except OSError:
-            mtime = 0
+            # 修改时间确认不了就不能按“足够旧”处理：跳过并计数，不删。
+            result.skipped += 1
+            return
         if not scanner.age_allowed(mtime, cat):
             return
     elif not scanner.match_name(os.path.basename(path), patterns):

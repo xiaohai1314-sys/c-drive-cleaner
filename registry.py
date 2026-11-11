@@ -247,9 +247,36 @@ def backup_hive_key(hive, path, label=""):
         dest = os.path.join(session, f"{safe}-{counter}.reg")
     if _export_key(_HIVE_EXPORT_NAMES[hive], path, dest):
         _LAST_BACKUP["dir"] = session
+        _BACKUP_FILES[(hive, path)] = dest
         return True
     _LAST_BACKUP["failed"].append(path)
     return False
+
+
+# (hive, 相对路径) -> 本次会话导出的 .reg 文件，供删除失败时回滚。
+_BACKUP_FILES = {}
+
+
+def backup_file_for(hive, path):
+    """该键本次备份的 .reg 路径，没有记录返回空串。"""
+    return _BACKUP_FILES.get((hive, path), "")
+
+
+def restore_backup(hive, path):
+    """用备份的 .reg 把键导入回来（删除中途失败时的回滚）。成功返回 True。"""
+    dest = backup_file_for(hive, path)
+    if not dest or not os.path.isfile(dest):
+        return False
+    try:
+        proc = subprocess.run(
+            ["reg.exe", "import", dest],
+            capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            timeout=60,
+        )
+    except Exception:
+        return False
+    return proc.returncode == 0
 
 
 def delete_tree_at(hive, path):

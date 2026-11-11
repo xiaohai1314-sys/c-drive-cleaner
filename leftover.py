@@ -199,10 +199,13 @@ _SKIP_SOFTWARE_KEYS = {
     "clients", "odbc", "wow6432node", "intel", "common files",
 }
 
-# 厂商键下没有软件归属含义的子键名（小写）。
+# 厂商键下没有软件归属含义的子键名（小写）：功能性子键（遥测、日志、
+# 诊断等）即使厂商软件已卸载也不该按“某款软件的残留”处理。
 _SKIP_APP_NAMES = {
     "common", "shared", "update", "updater", "settings", "config",
     "components", "registration", "currentversion", "data", "plugins",
+    "telemetry", "diagnostics", "diagnostic", "crashpad", "logs", "log",
+    "metrics", "usage", "feedback", "traces",
 }
 
 _MAX_VENDORS = 512

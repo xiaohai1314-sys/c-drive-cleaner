@@ -37,6 +37,7 @@ class Category:
     detect: tuple = ()              # 探测路径全部存在才启用（detectFile）
     os_min: str = ""                # 适用系统版本下限，如 "10.0"
     os_max: str = ""                # 适用系统版本上限（不含）
+    recycle: bool = False           # 判定把握不高的类别改送回收站，可恢复
 
 
 def _env(*parts) -> str:
@@ -654,9 +655,10 @@ def get_categories():
             kind="files",
             describe="在已安装软件里找不到对应项的一级目录，可能是卸载遗留",
             paths=[item["path"] for item in orphan_dirs],
-            note="仅按名称与安装位置比对：便携软件、手动解压的软件也会被列进来",
+            note="仅按名称与安装位置比对：便携软件、手动解压的软件也会被列进来；清理时移到回收站，可恢复",
             warning="这些目录未检测到对应的已安装软件，但可能仍在使用，请逐个确认",
             requires_confirm=True,
+            recycle=True,
         ))
 
     try:
