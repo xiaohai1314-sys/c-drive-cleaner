@@ -1,0 +1,39 @@
+name: Build Windows exe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, "fix/**"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build mftreader.exe
+        shell: pwsh
+        run: rustc -O -C panic=abort mftreader.rs -o mftreader.exe
+
+      - name: Install deps
+        shell: pwsh
+        run: python -m pip install --upgrade pip pyinstaller pillow
+
+      - name: Tests
+        shell: pwsh
+        run: python -m unittest discover -s tests -v
+
+      - name: PyInstaller
+        shell: pwsh
+        run: python -m PyInstaller --noconfirm "C盘清理工具.spec"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: C盘清理工具-${{ github.sha }}
+          path: dist/*.exe
+          if-no-files-found: error
