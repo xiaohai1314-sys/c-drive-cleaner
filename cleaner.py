@@ -56,10 +56,39 @@ def _running_processes():
     return names
 
 
+def _clean_reg_leftovers(cat, result, log):
+    """注册表残留：逐个键先备份后删除，备份失败就跳过，绝不裸删。"""
+    import registry
+    for entry in cat.paths or []:
+        hive, sep, rel = str(entry).partition("::")
+        if not sep or hive not in ("HKCU", "HKLM") or not rel:
+            result.skipped += 1
+            continue
+        label = rel.rsplit("\\", 1)[-1]
+        if not registry.backup_hive_key(hive, rel, label):
+            result.skipped += 1
+            result.errors.append(f"备份失败，已跳过：{hive}\\{rel}")
+            continue
+        if registry.delete_tree_at(hive, rel):
+            result.deleted += 1
+        else:
+            result.skipped += 1
+            result.errors.append(f"删除失败：{hive}\\{rel}")
+    info = registry.last_backup_info()
+    if info.get("dir"):
+        log(f"    注册表备份在 {info['dir']}")
+    if result.errors:
+        for message in result.errors[:5]:
+            log(f"    {message}")
+    return result
+
+
 def clean_category(cat, log=lambda message: None):
     result = CleanResult(cat)
     if cat.kind == "recyclebin":
         return _empty_recycle_bin(cat, result, log)
+    if cat.kind == "regleftover":
+        return _clean_reg_leftovers(cat, result, log)
     if cat.kind == "eventlogs":
         return _clear_event_logs(cat, result, log)
     if cat.kind == "searchindex":

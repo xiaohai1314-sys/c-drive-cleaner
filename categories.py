@@ -659,6 +659,24 @@ def get_categories():
             requires_confirm=True,
         ))
 
+    try:
+        import leftover as _leftover_reg
+        orphan_keys = _leftover_reg.find_registry_leftovers()
+    except Exception:
+        orphan_keys = []
+    if orphan_keys:
+        cats.append(Category(
+            key="reg_leftovers",
+            name="注册表残留（疑似）",
+            tier=DEEP,
+            kind="regleftover",
+            describe="在已安装软件里找不到对应项的注册表键（Software 区域）",
+            paths=[f"{item['hive']}::{item['path']}" for item in orphan_keys],
+            note="删除前会自动把键导出到 logs\\backups，导出失败的键不会删",
+            warning="这些键未检测到对应的已安装软件，但可能仍被便携软件使用，请逐个确认",
+            requires_confirm=True,
+        ))
+
     cats.append(Category(
         key="dism",
         name="系统组件清理 (WinSxS)",

@@ -61,6 +61,9 @@ def scan_category(cat):
     if cat.kind == "recyclebin":
         return recycle_bin_size(cat.paths)
 
+    if cat.kind == "regleftover":
+        return -1, len(cat.paths or [])
+
     if cat.kind == "command":
         if cat.size_fn is None:
             return -1, 0

@@ -176,21 +176,36 @@ def last_backup_info():
     return {"dir": _LAST_BACKUP["dir"], "failed": list(_LAST_BACKUP["failed"])}
 
 
-def _key_exists(path):
+_HIVE_EXPORT_NAMES = {"HKCU": "HKEY_CURRENT_USER", "HKLM": "HKEY_LOCAL_MACHINE"}
+
+
+def _hive_root(hive):
     if winreg is None:
+        return None
+    return {"HKCU": winreg.HKEY_CURRENT_USER,
+            "HKLM": winreg.HKEY_LOCAL_MACHINE}.get(hive)
+
+
+def _key_exists(path):
+    return _key_exists_in("HKCU", path)
+
+
+def _key_exists_in(hive, path):
+    root = _hive_root(hive)
+    if root is None:
         return False
     try:
-        with winreg.OpenKey(HKCU, path, 0, winreg.KEY_READ):
+        with winreg.OpenKey(root, path, 0, winreg.KEY_READ):
             return True
     except OSError:
         return False
 
 
-def _export_key(path, dest):
-    """用 reg.exe 导出 HKCU 下的一个键。成功返回 True。"""
+def _export_key(root_name, path, dest):
+    """用 reg.exe 导出一个键（root_name 是 HKEY_CURRENT_USER 之类全名）。"""
     try:
         proc = subprocess.run(
-            ["reg.exe", "export", "HKEY_CURRENT_USER\\" + path, dest, "/y"],
+            ["reg.exe", "export", root_name + "\\" + path, dest, "/y"],
             capture_output=True,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             timeout=60,
@@ -201,14 +216,21 @@ def _export_key(path, dest):
 
 
 def backup_key(path, label=""):
-    """删除前导出一个 HKCU 键。
+    """删除前导出一个 HKCU 键。语义见 backup_hive_key。"""
+    return backup_hive_key("HKCU", path, label)
+
+
+def backup_hive_key(hive, path, label=""):
+    """删除前导出任意 hive（HKCU / HKLM）下的一个键。
 
     键不存在视为已备份（删除本来就是空操作）；键存在但导出失败返回
     False，调用方必须跳过该键的删除。
     """
     if winreg is None:
         return True
-    if not _key_exists(path):
+    if hive not in _HIVE_EXPORT_NAMES:
+        return False
+    if not _key_exists_in(hive, path):
         return True
     session = _session_dir()
     try:
@@ -223,11 +245,30 @@ def backup_key(path, label=""):
     while os.path.exists(dest):
         counter += 1
         dest = os.path.join(session, f"{safe}-{counter}.reg")
-    if _export_key(path, dest):
+    if _export_key(_HIVE_EXPORT_NAMES[hive], path, dest):
         _LAST_BACKUP["dir"] = session
         return True
     _LAST_BACKUP["failed"].append(path)
     return False
+
+
+def delete_tree_at(hive, path):
+    """递归删除 hive 下的一个键。删掉并确认已消失返回 True。
+
+    调用方必须先 backup_hive_key 成功才可调用。
+    """
+    root = _hive_root(hive)
+    if root is None:
+        return False
+    parent_path, _sep, subkey = path.rpartition("\\")
+    if not subkey or not _key_exists_in(hive, path):
+        return False
+    try:
+        with winreg.OpenKey(root, parent_path, 0, winreg.KEY_ALL_ACCESS) as parent:
+            _delete_tree(parent, subkey)
+    except OSError:
+        return False
+    return not _key_exists_in(hive, path)
 
 
 def group_count(group_key):
