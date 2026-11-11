@@ -1,0 +1,263 @@
+{
+  "version": 1,
+  "note": "可扩展清理项。路径支持 %环境变量% 与通配符；glob_dirs 只匹配目录。改这里即可增删清理规则，无需改代码。",
+  "categories": [
+    {
+      "key": "app_wechat_cache",
+      "name": "微信缓存（专清）",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "微信的缓存与临时文件，不含聊天记录和接收的文件",
+      "warning": "不会删除聊天记录、图片、文件",
+      "glob_dirs": [
+        "%APPDATA%\\Tencent\\WeChat\\All Users\\*\\Cache",
+        "%APPDATA%\\Tencent\\WeChat\\All Users\\*\\FileStorage\\Cache",
+        "%APPDATA%\\Tencent\\WeChat\\All Users\\*\\FileStorage\\Temp",
+        "%APPDATA%\\Tencent\\xwechat\\*\\cache",
+        "%APPDATA%\\Tencent\\xwechat\\*\\temp",
+        "%USERPROFILE%\\Documents\\WeChat Files\\*\\FileStorage\\Cache",
+        "%USERPROFILE%\\Documents\\xwechat_files\\*\\cache",
+        "%USERPROFILE%\\Documents\\xwechat_files\\*\\temp",
+        "%APPDATA%\\Tencent\\xwechat\\log",
+        "%APPDATA%\\Tencent\\xwechat\\crashinfo",
+        "%APPDATA%\\Tencent\\xwechat\\update",
+        "%APPDATA%\\Tencent\\WeChat\\log",
+        "%APPDATA%\\Tencent\\WeChat\\crash",
+        "%APPDATA%\\Tencent\\WeChat\\cdncomm"
+      ],
+      "prune_dirs": true,
+      "note": "聊天记录在 msg/db_storage，不会被删除"
+    },
+    {
+      "key": "app_qq_cache",
+      "name": "QQ 缓存（专清）",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "QQ 的网页、界面与日志缓存",
+      "warning": "不含聊天记录和接收的文件",
+      "glob_dirs": [
+        "%APPDATA%\\Tencent\\QQ\\Cache",
+        "%APPDATA%\\Tencent\\QQ\\Code Cache",
+        "%APPDATA%\\Tencent\\QQ\\GPUCache",
+        "%APPDATA%\\Tencent\\QQ\\log",
+        "%USERPROFILE%\\Documents\\Tencent Files\\*\\Cache"
+      ],
+      "prune_dirs": true
+    },
+    {
+      "key": "privacy_browser",
+      "name": "浏览器隐私痕迹",
+      "tier": "deep",
+      "kind": "files",
+      "describe": "Chrome/Edge/夸克的历史记录、Cookie、登录数据、下载记录",
+      "warning": "会清除浏览历史、已保存的密码，并让网站登录状态失效，不可恢复",
+      "requires_confirm": true,
+      "paths": [
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\History",
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\History-journal",
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Cookies",
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Cookies-journal",
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Login Data",
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Web Data",
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Top Sites",
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Visited Links",
+        "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\History",
+        "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\History-journal",
+        "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Cookies",
+        "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Login Data",
+        "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Web Data",
+        "%LOCALAPPDATA%\\Quark\\User Data\\*\\History",
+        "%LOCALAPPDATA%\\Quark\\User Data\\*\\Cookies"
+      ]
+    },
+    {
+      "key": "privacy_recent",
+      "name": "最近使用记录",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "资源管理器的最近访问记录与跳转列表",
+      "warning": "会清除最近打开的文件列表",
+      "paths": [
+        "%APPDATA%\\Microsoft\\Windows\\Recent"
+      ],
+      "prune_dirs": true
+    },
+    {
+      "key": "slim_ime",
+      "name": "系统瘦身：日文/韩文输入法",
+      "tier": "deep",
+      "kind": "files",
+      "describe": "系统自带的日文、韩文输入法组件，不使用可删除",
+      "warning": "删除后如需使用需重新安装语言包，请确认不用再删",
+      "requires_confirm": true,
+      "paths": [
+        "%SystemRoot%\\IME\\IMEJP",
+        "%SystemRoot%\\System32\\IME\\IMEJP",
+        "%SystemRoot%\\SysWOW64\\IME\\IMEJP",
+        "%SystemRoot%\\IME\\imekr",
+        "%SystemRoot%\\System32\\IME\\imekr",
+        "%SystemRoot%\\SysWOW64\\IME\\imekr"
+      ],
+      "prune_dirs": true
+    },
+    {
+      "key": "defrag",
+      "name": "磁盘碎片整理（优化）",
+      "tier": "deep",
+      "kind": "command",
+      "describe": "对系统盘执行优化/碎片整理，机械盘收益明显，SSD 仅做 TRIM",
+      "warning": "耗时较长，期间请勿关机",
+      "requires_confirm": true,
+      "command": ["%SystemRoot%\\System32\\defrag.exe", "C:", "/O"],
+      "note": "SSD 上只是执行 TRIM，收益有限"
+    },
+    {
+      "key": "app_dingtalk",
+      "name": "钉钉缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "钉钉的媒体缓存与日志",
+      "glob_dirs": ["%APPDATA%\\DingTalk\\media_cache", "%APPDATA%\\DingTalk\\log",
+                    "%LOCALAPPDATA%\\DingTalk\\Cache", "%LOCALAPPDATA%\\DingTalk\\logs"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_wxwork",
+      "name": "企业微信缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "企业微信的缓存与临时文件",
+      "glob_dirs": ["%APPDATA%\\Tencent\\WXWork\\*\\Cache", "%APPDATA%\\Tencent\\WXWork\\*\\Temp",
+                    "%USERPROFILE%\\Documents\\WXWork\\*\\Cache"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_feishu",
+      "name": "飞书缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "飞书的缓存与日志",
+      "glob_dirs": ["%LOCALAPPDATA%\\Feishu\\cache", "%LOCALAPPDATA%\\Feishu\\log",
+                    "%APPDATA%\\Feishu\\cache"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_thunder",
+      "name": "迅雷缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "迅雷的下载缓存与日志",
+      "glob_dirs": ["%APPDATA%\\Thunder Network\\Thunder\\Profiles\\*\\Cache",
+                    "%LOCALAPPDATA%\\Thunder Network\\Thunder\\Cache",
+                    "%LOCALAPPDATA%\\Thunder Network\\Thunder\\Logs"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_cloudmusic",
+      "name": "网易云音乐缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "网易云音乐的网页与播放缓存",
+      "glob_dirs": ["%LOCALAPPDATA%\\Netease\\CloudMusic\\Cache",
+                    "%LOCALAPPDATA%\\Netease\\CloudMusic\\webdata"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_qqmusic",
+      "name": "QQ音乐缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "QQ音乐的缓存与日志",
+      "glob_dirs": ["%LOCALAPPDATA%\\Tencent\\QQMusic\\Cache",
+                    "%APPDATA%\\Tencent\\QQMusic\\Cache",
+                    "%LOCALAPPDATA%\\Tencent\\QQMusic\\Logs"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_iqiyi",
+      "name": "爱奇艺缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "爱奇艺的播放缓存",
+      "glob_dirs": ["%APPDATA%\\IQIYI Video\\Cache", "%LOCALAPPDATA%\\IQIYI Video\\Cache"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_txvideo",
+      "name": "腾讯视频缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "腾讯视频的播放缓存与日志",
+      "glob_dirs": ["%APPDATA%\\Tencent\\QQLive\\Cache", "%LOCALAPPDATA%\\Tencent\\QQLive\\Cache",
+                    "%APPDATA%\\Tencent\\QQLive\\log"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_bilibili",
+      "name": "哔哩哔哩缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "B 站的缓存与日志",
+      "glob_dirs": ["%LOCALAPPDATA%\\bilibili\\Cache", "%LOCALAPPDATA%\\bilibili\\log"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_jianying",
+      "name": "剪映缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "剪映的缓存与日志",
+      "glob_dirs": ["%LOCALAPPDATA%\\JianyingPro\\User Data\\Cache",
+                    "%LOCALAPPDATA%\\JianyingPro\\logs"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_sogou",
+      "name": "搜狗输入法缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "搜狗输入法的缓存",
+      "glob_dirs": ["%APPDATA%\\SogouInput\\*\\Cache", "%LOCALAPPDATA%\\SogouInput\\*\\Cache"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_office_cache",
+      "name": "Office 文档缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Office 的文档缓存与遥测",
+      "glob_dirs": ["%LOCALAPPDATA%\\Microsoft\\Office\\16.0\\OfficeFileCache",
+                    "%LOCALAPPDATA%\\Microsoft\\Office\\OTele"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_adobe",
+      "name": "Adobe 媒体缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Adobe 软件的媒体缓存",
+      "glob_dirs": ["%LOCALAPPDATA%\\Adobe\\Common\\Media Cache",
+                    "%LOCALAPPDATA%\\Adobe\\Common\\Media Cache Files"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_steam",
+      "name": "Steam 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Steam 的网页缓存与日志",
+      "glob_dirs": ["%LOCALAPPDATA%\\Steam\\htmlcache", "%LOCALAPPDATA%\\Steam\\logs"],
+      "prune_dirs": true
+    },
+    {
+      "key": "app_teams",
+      "name": "Teams 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Microsoft Teams 的缓存与日志",
+      "glob_dirs": ["%APPDATA%\\Microsoft\\Teams\\Cache", "%APPDATA%\\Microsoft\\Teams\\logs",
+                    "%APPDATA%\\Microsoft\\Teams\\Code Cache"],
+      "prune_dirs": true
+    }
+  ]
+}
