@@ -27,7 +27,7 @@ Windows 下的图形化 C 盘清理工具，先扫描、再勾选、后清理。
 
 ## 规则库与云端更新
 
-- 内置规则在 `rules.json`，可自行扩展；已覆盖常见软件缓存（钉钉、企业微信、飞书、迅雷、网易云音乐、QQ音乐、爱奇艺、腾讯视频、B站、剪映、搜狗输入法、Office、Adobe、Steam、Teams 等）。
+- 内置规则在 `rules.json`，可自行扩展；共约 100 条，覆盖浏览器（Chrome/Edge/Firefox/Brave/Opera/QQ浏览器等）、通讯会议（钉钉、企业微信、飞书、Telegram、Discord、Slack）、影音（网易云音乐、QQ音乐、爱奇艺、腾讯视频、B站、剪映）、开发工具（VS Code、JetBrains、Android Studio、npm/pip/uv、Go 构建缓存）、游戏平台（Steam、Epic、Battle.net）与常用国产软件缓存。Gradle/Conda 的大缓存是代码内置项（深度档）。注意：`rules.json` 条目都按不可信规则执行，目标必须落在临时目录或路径段名为缓存/日志的目录内，否则会被安全检查跳过。
 - **云端更新**：在 `rules_update.json` 里只填写 https 地址。远程规则不能带命令，也不能指向文档、桌面或下载，只能落在临时目录或缓存目录。清理执行时会再检查一次路径。本地自带的碎片整理命令不会被远程规则覆盖。
 
 ## 清理项

@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "note": "可扩展清理项。路径支持 %环境变量% 与通配符；glob_dirs 只匹配目录。v2 字段：exclude 排除文件名、min_age_minutes 只清 N 分钟前的文件、process_absent 进程运行时跳过、detect 探测路径存在才启用、os_min/os_max 系统版本范围。改这里即可增删清理规则，无需改代码。",
   "categories": [
     {
@@ -461,6 +461,1692 @@
         "%APPDATA%\\Microsoft\\Teams\\Cache",
         "%APPDATA%\\Microsoft\\Teams\\logs",
         "%APPDATA%\\Microsoft\\Teams\\Code Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_chrome_cache",
+      "name": "Chrome 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Chrome 的网页、代码与 GPU 缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Code Cache",
+        "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_edge_cache",
+      "name": "Edge 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Edge 的网页、代码与 GPU 缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Code Cache",
+        "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_chrome_beta",
+      "name": "Chrome 测试版缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Chrome Beta/Dev/Canary 的网页缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Google\\Chrome Beta\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\Google\\Chrome Dev\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\Google\\Chrome SxS\\User Data\\*\\Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_firefox",
+      "name": "Firefox 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Firefox 的网页缓存与启动缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\cache2",
+        "%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\startupCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_waterfox",
+      "name": "Waterfox 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Waterfox 的网页缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Waterfox\\Profiles\\*\\cache2"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_thunderbird",
+      "name": "Thunderbird 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Thunderbird 的网页缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Thunderbird\\Profiles\\*\\cache2"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_brave",
+      "name": "Brave 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Brave 的网页、代码与 GPU 缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\User Data\\*\\Code Cache",
+        "%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\User Data\\*\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_opera",
+      "name": "Opera 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Opera 的网页与 GPU 缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Opera Software\\Opera Stable\\Cache",
+        "%APPDATA%\\Opera Software\\Opera Stable\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_vivaldi",
+      "name": "Vivaldi 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Vivaldi 的网页、代码与 GPU 缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Vivaldi\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\Vivaldi\\User Data\\*\\Code Cache",
+        "%LOCALAPPDATA%\\Vivaldi\\User Data\\*\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_qqbrowser",
+      "name": "QQ浏览器缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "QQ浏览器的网页、代码缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Tencent\\QQBrowser\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\Tencent\\QQBrowser\\User Data\\*\\Code Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_360browser",
+      "name": "360浏览器缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "360极速/安全浏览器的网页缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\360Chrome\\Chrome\\User Data\\*\\Cache",
+        "%APPDATA%\\360se6\\User Data\\*\\Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_centbrowser",
+      "name": "百分浏览器缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Cent Browser 的网页缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\CentBrowser\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\CentBrowser\\User Data\\*\\Code Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_quark",
+      "name": "夸克缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "夸克浏览器/网盘客户端的网页缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Quark\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\Quark\\User Data\\*\\Code Cache",
+        "%LOCALAPPDATA%\\Quark\\User Data\\*\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_telegram",
+      "name": "Telegram 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Telegram Desktop 的图片与媒体缓存（不含登录数据）",
+      "glob_dirs": [
+        "%APPDATA%\\Telegram Desktop\\tdata\\user_data\\cache",
+        "%APPDATA%\\Telegram Desktop\\tdata\\user_data\\media_cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_discord",
+      "name": "Discord 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Discord 的网页缓存与日志",
+      "glob_dirs": [
+        "%APPDATA%\\discord\\Cache",
+        "%APPDATA%\\discord\\Code Cache",
+        "%APPDATA%\\discord\\GPUCache",
+        "%APPDATA%\\discord\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_slack",
+      "name": "Slack 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Slack 的网页缓存与日志",
+      "glob_dirs": [
+        "%APPDATA%\\Slack\\Cache",
+        "%APPDATA%\\Slack\\Code Cache",
+        "%APPDATA%\\Slack\\GPUCache",
+        "%APPDATA%\\Slack\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_zoom",
+      "name": "Zoom 日志",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Zoom 的运行日志",
+      "glob_dirs": [
+        "%APPDATA%\\Zoom\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_skype",
+      "name": "Skype 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Skype 的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Microsoft\\Skype for Desktop\\Cache",
+        "%APPDATA%\\Microsoft\\Skype for Desktop\\Code Cache",
+        "%APPDATA%\\Microsoft\\Skype for Desktop\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_line",
+      "name": "LINE 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "LINE 的图片缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\LINE\\Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_signal",
+      "name": "Signal 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Signal Desktop 的网页缓存与日志",
+      "glob_dirs": [
+        "%APPDATA%\\Signal\\Cache",
+        "%APPDATA%\\Signal\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_element",
+      "name": "Element 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Element 的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Element\\Cache",
+        "%APPDATA%\\Element\\Code Cache",
+        "%APPDATA%\\Element\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_rocketchat",
+      "name": "RocketChat 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "RocketChat 的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\RocketChat\\Cache",
+        "%APPDATA%\\RocketChat\\Code Cache",
+        "%APPDATA%\\RocketChat\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_mattermost",
+      "name": "Mattermost 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Mattermost 的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Mattermost\\Cache",
+        "%APPDATA%\\Mattermost\\Code Cache",
+        "%APPDATA%\\Mattermost\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_vscode",
+      "name": "VS Code 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "VS Code 的缓存与日志",
+      "glob_dirs": [
+        "%APPDATA%\\Code\\Cache",
+        "%APPDATA%\\Code\\Code Cache",
+        "%APPDATA%\\Code\\GPUCache",
+        "%APPDATA%\\Code\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_vscode_insiders",
+      "name": "VS Code Insiders 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "VS Code Insiders 的缓存与日志",
+      "glob_dirs": [
+        "%APPDATA%\\Code - Insiders\\Cache",
+        "%APPDATA%\\Code - Insiders\\Code Cache",
+        "%APPDATA%\\Code - Insiders\\GPUCache",
+        "%APPDATA%\\Code - Insiders\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_cursor",
+      "name": "Cursor 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Cursor 的缓存与日志",
+      "glob_dirs": [
+        "%APPDATA%\\Cursor\\Cache",
+        "%APPDATA%\\Cursor\\Code Cache",
+        "%APPDATA%\\Cursor\\GPUCache",
+        "%APPDATA%\\Cursor\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_claude",
+      "name": "Claude 桌面版缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Claude 桌面版的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Claude\\Cache",
+        "%APPDATA%\\Claude\\Code Cache",
+        "%APPDATA%\\Claude\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_jetbrains",
+      "name": "JetBrains 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "JetBrains 全家桶的索引缓存与日志",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\JetBrains\\*\\caches",
+        "%LOCALAPPDATA%\\JetBrains\\*\\log"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_androidstudio",
+      "name": "Android Studio 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Android Studio 的缓存与日志",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Google\\AndroidStudio*\\caches",
+        "%LOCALAPPDATA%\\Google\\AndroidStudio*\\log"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_visualstudio",
+      "name": "Visual Studio 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Visual Studio 的 Roslyn 编译缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Microsoft\\VisualStudio\\Roslyn\\Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_npm",
+      "name": "npm 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "npm 的下载缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\npm-cache",
+        "%APPDATA%\\npm-cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_yarn",
+      "name": "Yarn 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Yarn 的包缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Yarn\\Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_pip",
+      "name": "pip 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "pip 的下载缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\pip\\Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_uv",
+      "name": "uv 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "uv 的下载缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\uv\\cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_gobuild",
+      "name": "Go 构建缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Go 的编译缓存（可自动重建）",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\go-build"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_nuget",
+      "name": "NuGet HTTP 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "NuGet 的 HTTP 下载缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\NuGet\\v3-cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_docker",
+      "name": "Docker Desktop 日志",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Docker Desktop 的运行日志",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Docker\\log"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_postman",
+      "name": "Postman 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Postman 的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Postman\\Cache",
+        "%APPDATA%\\Postman\\Code Cache",
+        "%APPDATA%\\Postman\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_insomnia",
+      "name": "Insomnia 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Insomnia 的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Insomnia\\Cache",
+        "%APPDATA%\\Insomnia\\Code Cache",
+        "%APPDATA%\\Insomnia\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_apifox",
+      "name": "Apifox 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Apifox 的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Apifox\\Cache",
+        "%APPDATA%\\Apifox\\Code Cache",
+        "%APPDATA%\\Apifox\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_compass",
+      "name": "MongoDB Compass 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Compass 的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\MongoDB Compass\\Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_github_desktop",
+      "name": "GitHub Desktop 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "GitHub Desktop 的缓存与日志",
+      "glob_dirs": [
+        "%APPDATA%\\GitHub Desktop\\Cache",
+        "%APPDATA%\\GitHub Desktop\\Code Cache",
+        "%APPDATA%\\GitHub Desktop\\GPUCache",
+        "%APPDATA%\\GitHub Desktop\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_sublime",
+      "name": "Sublime Text 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Sublime Text 的缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Sublime Text\\Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_wxdevtools",
+      "name": "微信开发者工具缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "微信开发者工具的网页缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\微信开发者工具\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\微信开发者工具\\User Data\\*\\Code Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_unity",
+      "name": "Unity 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Unity 编辑器的资源缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Unity\\Caches"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_epic",
+      "name": "Epic 启动器缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Epic Games Launcher 的运行日志",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\EpicGamesLauncher\\Saved\\Logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_origin",
+      "name": "Origin 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Origin 的网页缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Origin\\Web Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_ubisoft",
+      "name": "Ubisoft Connect 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Ubisoft Connect 的网页缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Ubisoft Game Launcher\\cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_battlenet",
+      "name": "Battle.net 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Battle.net 的网页缓存与日志",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Battle.net\\Cache",
+        "%LOCALAPPDATA%\\Battle.net\\Logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_riot",
+      "name": "Riot Client 日志",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Riot Client 的运行日志",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Riot Games\\Riot Client\\Logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_itch",
+      "name": "itch.io 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "itch 客户端的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\itch\\Cache",
+        "%APPDATA%\\itch\\Code Cache",
+        "%APPDATA%\\itch\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_obs",
+      "name": "OBS 日志",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "OBS Studio 的运行日志",
+      "glob_dirs": [
+        "%APPDATA%\\obs-studio\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_handbrake",
+      "name": "HandBrake 日志",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "HandBrake 的运行日志",
+      "glob_dirs": [
+        "%APPDATA%\\HandBrake\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_capcut",
+      "name": "CapCut 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "CapCut 的网页缓存（不含草稿）",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\CapCut\\User Data\\Cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_notion",
+      "name": "Notion 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Notion 的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Notion\\Cache",
+        "%APPDATA%\\Notion\\Code Cache",
+        "%APPDATA%\\Notion\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_obsidian",
+      "name": "Obsidian 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Obsidian 的网页缓存（不含仓库文件）",
+      "glob_dirs": [
+        "%APPDATA%\\obsidian\\Cache",
+        "%APPDATA%\\obsidian\\Code Cache",
+        "%APPDATA%\\obsidian\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_logseq",
+      "name": "Logseq 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Logseq 的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Logseq\\Cache",
+        "%APPDATA%\\Logseq\\Code Cache",
+        "%APPDATA%\\Logseq\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_typora",
+      "name": "Typora 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Typora 的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Typora\\Cache",
+        "%APPDATA%\\Typora\\Code Cache",
+        "%APPDATA%\\Typora\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_siyuan",
+      "name": "思源笔记缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "思源笔记的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\SiYuan\\Cache",
+        "%APPDATA%\\SiYuan\\Code Cache",
+        "%APPDATA%\\SiYuan\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_yuque",
+      "name": "语雀缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "语雀桌面版的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Yuque\\Cache",
+        "%APPDATA%\\Yuque\\Code Cache",
+        "%APPDATA%\\Yuque\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_ynote",
+      "name": "有道云笔记缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "有道云笔记的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\ynote-desktop\\Cache",
+        "%APPDATA%\\ynote-desktop\\Code Cache",
+        "%APPDATA%\\ynote-desktop\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_canva",
+      "name": "Canva 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Canva 桌面版的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Canva\\Cache",
+        "%APPDATA%\\Canva\\Code Cache",
+        "%APPDATA%\\Canva\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_drawio",
+      "name": "draw.io 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "draw.io 的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\draw.io\\Cache",
+        "%APPDATA%\\draw.io\\Code Cache",
+        "%APPDATA%\\draw.io\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_mubu",
+      "name": "幕布缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "幕布桌面版的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\Mubu\\Cache",
+        "%APPDATA%\\Mubu\\Code Cache",
+        "%APPDATA%\\Mubu\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_utools",
+      "name": "uTools 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "uTools 的网页缓存",
+      "glob_dirs": [
+        "%APPDATA%\\uTools\\Cache",
+        "%APPDATA%\\uTools\\Code Cache",
+        "%APPDATA%\\uTools\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_douyin",
+      "name": "抖音缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "抖音桌面版的网页缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Douyin\\Cache",
+        "%LOCALAPPDATA%\\Douyin\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_doubao",
+      "name": "豆包缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "豆包桌面版的网页缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Doubao\\User Data\\*\\Cache",
+        "%LOCALAPPDATA%\\Doubao\\User Data\\*\\Code Cache",
+        "%LOCALAPPDATA%\\Doubao\\User Data\\*\\GPUCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_wps",
+      "name": "WPS 缓存与日志",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "WPS 的缓存与日志（不含文档备份目录）",
+      "glob_dirs": [
+        "%APPDATA%\\Kingsoft\\office6\\cache",
+        "%APPDATA%\\Kingsoft\\office6\\log"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_libreoffice",
+      "name": "LibreOffice 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "LibreOffice 的缓存",
+      "glob_dirs": [
+        "%APPDATA%\\LibreOffice\\4\\cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_onlyoffice",
+      "name": "ONLYOFFICE 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "ONLYOFFICE 桌面版的缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\ONLYOFFICE\\DesktopEditors\\data\\cache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_zotero",
+      "name": "Zotero 缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "Zotero 的网页缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Zotero\\Profiles\\*\\cache2"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_onedrive_logs",
+      "name": "OneDrive 日志",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "OneDrive 的运行日志",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\Microsoft\\OneDrive\\logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_todesk",
+      "name": "ToDesk 日志",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "ToDesk 的运行日志",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\ToDesk\\Logs"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_nvidia_shader",
+      "name": "NVIDIA 着色器缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "NVIDIA 的 GL/DX 着色器缓存（会自动重建）",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\NVIDIA\\GLCache",
+        "%LOCALAPPDATA%\\NVIDIA\\DXCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_amd_shader",
+      "name": "AMD 着色器缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "AMD 的着色器缓存（会自动重建）",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\AMD\\DxCache",
+        "%LOCALAPPDATA%\\AMD\\GLCache"
+      ],
+      "prune_dirs": true,
+      "exclude": [
+        "*.doc",
+        "*.docx",
+        "*.xls",
+        "*.xlsx",
+        "*.ppt",
+        "*.pptx",
+        "*.pdf",
+        "*.dwg"
+      ]
+    },
+    {
+      "key": "app_adrive",
+      "name": "阿里云盘缓存",
+      "tier": "standard",
+      "kind": "files",
+      "describe": "阿里云盘客户端的网页缓存",
+      "glob_dirs": [
+        "%LOCALAPPDATA%\\aDrive\\Cache",
+        "%LOCALAPPDATA%\\aDrive\\Code Cache",
+        "%LOCALAPPDATA%\\aDrive\\GPUCache"
       ],
       "prune_dirs": true,
       "exclude": [

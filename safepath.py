@@ -156,6 +156,14 @@ def is_reparse_point(path: str) -> bool:
 _REMOTE_CACHE_PARTS = {
     "cache", "caches", "code cache", "gpucache", "gpu cache", "htmlcache",
     "logs", "log",
+    # 各应用事实上的缓存/临时目录名（仍必须是完整的路径段，不含通配）：
+    # Mozilla 系 cache2/startupCache、Telegram/DingTalk media_cache、
+    # Origin Web Cache、着色器 GLCache/DXCache、npm/go/nuget 工具缓存、
+    # Adobe Media Cache、Office OfficeFileCache、网易云 webdata、Temp。
+    "cache2", "startupcache", "media_cache", "web cache", "glcache",
+    "dxcache", "npm-cache", "v3-cache", "go-build", "componentmodelcache",
+    "officefilecache", "media cache", "media cache files", "webdata",
+    "temp",
 }
 
 

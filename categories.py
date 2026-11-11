@@ -741,6 +741,42 @@ def get_categories():
             requires_confirm=True,
         ))
 
+    # 构建工具的大缓存放在用户主目录下，不在外部规则（不可信）的允许
+    # 根目录内，只能做成内置项：深度档 + 需确认，路径写死在代码里。
+    gradle_cache = _env("%USERPROFILE%", ".gradle", "caches")
+    if os.path.isdir(gradle_cache):
+        cats.append(Category(
+            key="app_gradle",
+            name="Gradle 构建缓存",
+            tier=DEEP,
+            kind="files",
+            describe="Gradle 的依赖与构建缓存，清后首次构建会重新下载",
+            paths=[gradle_cache],
+            warning="缓存体积大且为多项目共享，清后所有 Gradle 项目首次构建变慢",
+            requires_confirm=True,
+            prune_dirs=True,
+            exclude=("*.doc", "*.docx", "*.xls", "*.xlsx", "*.ppt", "*.pptx",
+                     "*.pdf", "*.dwg"),
+        ))
+    conda_pkgs = [path for path in (
+        _env("%USERPROFILE%", "anaconda3", "pkgs"),
+        _env("%USERPROFILE%", "miniconda3", "pkgs"),
+    ) if os.path.isdir(path)]
+    if conda_pkgs:
+        cats.append(Category(
+            key="app_conda",
+            name="Conda 包缓存",
+            tier=DEEP,
+            kind="files",
+            describe="Anaconda/Miniconda 的包下载缓存",
+            paths=conda_pkgs,
+            warning="清后新建环境需重新下载包",
+            requires_confirm=True,
+            prune_dirs=True,
+            exclude=("*.doc", "*.docx", "*.xls", "*.xlsx", "*.ppt", "*.pptx",
+                     "*.pdf", "*.dwg"),
+        ))
+
     existing_keys = {c.key for c in cats}
     for extra in _load_external_rules():
         if extra.key not in existing_keys:
