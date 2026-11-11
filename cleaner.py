@@ -108,11 +108,11 @@ def _delete_file(path, allowed, patterns, result, untrusted=False):
         if safepath.execution_forbidden(path, untrusted=untrusted):
             result.skipped += 1
             return
-        os.remove(path)
+        safepath.unlink_regular(path, allowed)
     except PermissionError:
         try:
             os.chmod(path, stat.S_IWRITE)
-            os.remove(path)
+            safepath.unlink_regular(path, allowed)
         except OSError:
             _mark_pending(path, size, result)
             return

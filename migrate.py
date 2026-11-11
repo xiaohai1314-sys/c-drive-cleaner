@@ -1,10 +1,9 @@
 """数据迁移：把大目录搬到其他盘，并在原位置建立目录联接（junction）。
 
 安全策略：
-1. 先完整复制到目标盘（robocopy /MOVE 在复制成功后才删除源文件）。
-2. 复制后校验源目录是否还有残留文件；有残留（通常是文件被占用）就
-   从目标盘把已删除的文件复制回源目录，再删除目标副本，保持原状。
-3. 只有确认源目录已清空，才删除空目录并建立联接。
+1. 先完整复制到目标盘，并用整文件 SHA-256 校验。
+2. 把源目录改名为备份，再建立联接并确认联接能解析。
+3. 只有联接校验通过才删除备份。任一步失败都把备份放回原路径。
 任何一步失败都不会丢数据：目标副本在建立联接前一直保留。
 """
 import ctypes
@@ -208,13 +207,11 @@ def _fingerprint(path: str):
     digest = hashlib.sha256()
     try:
         with open(path, "rb") as handle:
-            if size <= 8 * 1024 * 1024:
-                digest.update(handle.read())
-            else:
-                digest.update(handle.read(65536))
-                handle.seek(max(0, size - 65536))
-                digest.update(handle.read(65536))
-                digest.update(str(size).encode("ascii"))
+            while True:
+                block = handle.read(1024 * 1024)
+                if not block:
+                    break
+                digest.update(block)
     except OSError:
         return None
     return (size, digest.hexdigest())
@@ -271,32 +268,45 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
             remove_tree(dest)
         raise MigrateError(f"复制校验失败（robocopy 返回 {rc}），源目录保持原样")
 
-    for rel, mark in original.items():
-        path = os.path.join(src, rel)
-        copied = _fingerprint(os.path.join(dest, rel))
-        current = _fingerprint(path)
-        if current is None or copied is None or current != copied or current != mark:
-            raise MigrateError("源目录在复制后发生变化，源文件和目标副本都已保留")
-        if safepath.is_reparse_point(path):
-            raise MigrateError("源路径变成了链接，已停止删除，两边都保留")
-        os.remove(path)
-    if file_inventory(src):
-        raise MigrateError("源目录仍有文件未能移走，目标副本已保留，没有删除唯一的一份")
+    fresh = file_inventory(src)
+    if fresh != original or not inventory_covers(file_inventory(dest), fresh):
+        raise MigrateError("源目录在复制后发生变化，源文件和目标副本都已保留")
 
-    _remove_junction_dirs(src)
+    backup = src.rstrip("\\/") + ".migrate-bak"
+    if os.path.lexists(backup):
+        raise MigrateError(f"备份位置已存在，已停止：{backup}")
+    os.rename(src, backup)
     try:
-        os.rmdir(src)
-    except OSError:
-        pass
-
-    create_junction(src, dest)
-    if not junction_works(src, dest):
-        log("联接校验失败（子目录不可访问），正在还原…")
-        _rollback_to_source(src, dest)
+        create_junction(src, dest)
+        if not junction_works(src, dest):
+            raise MigrateError("联接校验失败")
+    except Exception as exc:
+        log("建立联接失败，正在把源目录还原…")
+        _restore_renamed_source(src, backup)
+        if inventory_covers(file_inventory(src), original) and os.path.isdir(dest):
+            remove_tree(dest)
         raise MigrateError(
-            "该位置不支持跨卷联接（可能被安全软件的文件防护限制），已还原，数据未丢失")
+            "建立联接失败，源目录已还原，数据未丢失") from exc
+    remove_tree(backup)
     log(f"已建立联接：{src} → {dest}")
     return src, dest
+
+
+def _restore_renamed_source(src: str, backup: str):
+    """联接失败时把改名的源目录放回原路径。"""
+    if not os.path.lexists(backup):
+        raise MigrateError(f"找不到备份，无法还原：{backup}")
+    if os.path.lexists(src):
+        if os.path.islink(src) or safepath.is_reparse_point(src):
+            try:
+                os.unlink(src)
+            except OSError:
+                os.rmdir(src)
+        elif os.path.isdir(src) and not os.listdir(src):
+            os.rmdir(src)
+        else:
+            raise MigrateError(f"原路径被占用，数据仍在 {backup}")
+    os.rename(backup, src)
 
 
 def undo(src: str, log=lambda _message: None):

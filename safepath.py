@@ -250,6 +250,132 @@ def execution_forbidden(path: str, untrusted=False, environ=None) -> bool:
     return False
 
 
+def _within_allowed(path: str, allowed) -> bool:
+    if not allowed:
+        return True
+    target = normalize(path).lower()
+    for root in allowed:
+        if not root:
+            continue
+        base = normalize(root).lower().rstrip("\\/")
+        if target == base or target.startswith(base + "\\") or target.startswith(base + "/"):
+            return True
+    return False
+
+
+def _parents_are_plain(path: str, allowed) -> bool:
+    """删除前 lstat 文件本身，以及直到文件系统根的每一级父目录。"""
+    if not _within_allowed(path, allowed):
+        return False
+    current = path
+    seen = set()
+    while current and current not in seen:
+        seen.add(current)
+        if os.path.islink(current) or is_reparse_point(current):
+            return False
+        parent = os.path.dirname(current)
+        if not parent or parent == current:
+            return True
+        current = parent
+    return True
+
+
+def unlink_regular(path: str, allowed=()):
+    """确认不是链接后删除。逐级 O_NOFOLLOW 打开，避免父目录在检查后被换成链接。"""
+    if not _parents_are_plain(path, allowed):
+        raise OSError(f"拒绝删除链接路径：{path}")
+    if os.name == "nt":
+        _windows_unlink_noreparse(path, allowed)
+        return
+    absolute = os.path.abspath(path)
+    parts = [part for part in absolute.split(os.sep) if part]
+    if not parts:
+        raise OSError("拒绝删除根路径")
+    dir_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        dir_flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        dir_flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        dir_flags |= os.O_CLOEXEC
+    dirfd = os.open(os.sep, dir_flags)
+    try:
+        for part in parts[:-1]:
+            next_fd = os.open(part, dir_flags, dir_fd=dirfd)
+            os.close(dirfd)
+            dirfd = next_fd
+            info = os.fstat(dirfd)
+            if not stat.S_ISDIR(info.st_mode):
+                raise OSError("父级不是普通目录")
+        name = parts[-1]
+        file_flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            file_flags |= os.O_NOFOLLOW
+        if hasattr(os, "O_CLOEXEC"):
+            file_flags |= os.O_CLOEXEC
+        fd = os.open(name, file_flags, dir_fd=dirfd)
+        try:
+            file_info = os.fstat(fd)
+            if not stat.S_ISREG(file_info.st_mode):
+                raise OSError("拒绝删除非普通文件")
+        finally:
+            os.close(fd)
+        if not _parents_are_plain(absolute, allowed):
+            raise OSError(f"拒绝删除链接路径：{absolute}")
+        os.unlink(name, dir_fd=dirfd)
+    finally:
+        os.close(dirfd)
+
+
+def _windows_unlink_noreparse(path: str, allowed):
+    """用 FILE_FLAG_OPEN_REPARSE_POINT 打开句柄，确认不是重解析点后按句柄删除。"""
+    import ctypes
+    from ctypes import wintypes
+    if not _parents_are_plain(path, allowed):
+        raise OSError(f"拒绝删除链接路径：{path}")
+    delete_access = 0x00010000
+    generic_read = 0x80000000
+    share = 0x1 | 0x2 | 0x4
+    open_existing = 3
+    flag = 0x00200000 | 0x02000000  # OPEN_REPARSE_POINT | BACKUP_SEMANTICS
+    kernel = ctypes.windll.kernel32
+    handle = kernel.CreateFileW(
+        path, delete_access | generic_read, share, None, open_existing, flag, None)
+    invalid = ctypes.c_void_p(-1).value
+    if handle in (0, invalid, -1):
+        raise OSError("无法打开文件")
+    try:
+        class _ByHandle(ctypes.Structure):
+            _fields_ = [
+                ("dwFileAttributes", wintypes.DWORD),
+                ("ftCreationTime", wintypes.FILETIME),
+                ("ftLastAccessTime", wintypes.FILETIME),
+                ("ftLastWriteTime", wintypes.FILETIME),
+                ("dwVolumeSerialNumber", wintypes.DWORD),
+                ("nFileSizeHigh", wintypes.DWORD),
+                ("nFileSizeLow", wintypes.DWORD),
+                ("nNumberOfLinks", wintypes.DWORD),
+                ("nFileIndexHigh", wintypes.DWORD),
+                ("nFileIndexLow", wintypes.DWORD),
+            ]
+
+        class _Disposition(ctypes.Structure):
+            _fields_ = [("DeleteFile", wintypes.BOOLEAN)]
+
+        info = _ByHandle()
+        if not kernel.GetFileInformationByHandle(handle, ctypes.byref(info)):
+            raise OSError("无法读取文件属性")
+        if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT:
+            raise OSError("拒绝删除重解析点")
+        if not _parents_are_plain(path, allowed):
+            raise OSError(f"拒绝删除链接路径：{path}")
+        mark = _Disposition(True)
+        if not kernel.SetFileInformationByHandle(handle, 4, ctypes.byref(mark), ctypes.sizeof(mark)):
+            raise OSError("无法按句柄删除文件")
+    finally:
+        kernel.CloseHandle(handle)
+
+
 def clean_forbidden(path: str, environ=None) -> bool:
     """清理执行时再拦一次：文档库、密码库、链接、盘符根和关键系统文件。"""
     return execution_forbidden(path, untrusted=False, environ=environ)

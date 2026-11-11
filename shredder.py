@@ -35,7 +35,7 @@ def shred_file(path, passes=1):
                 left -= block
             handle.flush()
             os.fsync(handle.fileno())
-    os.remove(path)
+    safepath.unlink_regular(path, [os.path.dirname(path) or "."])
 
 
 def _remove_empty_dirs(root):

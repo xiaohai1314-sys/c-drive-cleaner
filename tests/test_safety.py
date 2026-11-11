@@ -910,6 +910,185 @@ class _OkOpener:
         return Resp()
 
 
+class FourthReviewTests(unittest.TestCase):
+    def _drive(self, dest_root):
+        def drive(path):
+            full = os.path.abspath(path)
+            root = os.path.abspath(dest_root)
+            if full == root or full.startswith(root + os.sep):
+                return "D:"
+            return "C:"
+        return drive
+
+    def test_large_file_middle_byte_blocks_directory_migrate(self):
+        src = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp()
+        try:
+            payload = bytearray(b"A" * (9 * 1024 * 1024))
+            original = os.path.join(src, "big.bin")
+            with open(original, "wb") as handle:
+                handle.write(payload)
+
+            def robocopy(source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                for name in list(os.listdir(source)):
+                    sp = os.path.join(source, name)
+                    if os.path.isfile(sp) and not os.path.islink(sp):
+                        shutil.copy2(sp, os.path.join(dest, name))
+                with open(os.path.join(source, "big.bin"), "r+b") as handle:
+                    handle.seek(4 * 1024 * 1024)
+                    handle.write(b"B")
+                return 0
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
+                    mock.patch.object(migrate, "is_junction", return_value=False):
+                with self.assertRaises(migrate.MigrateError):
+                    migrate.migrate(src, dest_root)
+            with open(original, "rb") as handle:
+                handle.seek(4 * 1024 * 1024)
+                self.assertEqual(handle.read(1), b"B")
+            copied = os.path.join(dest_root, os.path.basename(src), "big.bin")
+            with open(copied, "rb") as handle:
+                handle.seek(4 * 1024 * 1024)
+                self.assertEqual(handle.read(1), b"A")
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+
+    def test_large_file_middle_byte_blocks_single_file_migrate(self):
+        folder = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp(prefix="dest-")
+        try:
+            src = os.path.join(folder, "big.bin")
+            payload = bytearray(b"C" * (9 * 1024 * 1024))
+            with open(src, "wb") as handle:
+                handle.write(payload)
+            real_copy = shutil.copy2
+
+            def copy2(source, dest, *args, **kwargs):
+                real_copy(source, dest, *args, **kwargs)
+                with open(source, "r+b") as handle:
+                    handle.seek(4 * 1024 * 1024)
+                    handle.write(b"D")
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
+                    mock.patch("migrate.shutil.copy2", side_effect=copy2):
+                with self.assertRaises(migrate.MigrateError):
+                    migrate.migrate_file(src, dest_root)
+            with open(src, "rb") as handle:
+                handle.seek(4 * 1024 * 1024)
+                self.assertEqual(handle.read(1), b"D")
+            with open(os.path.join(dest_root, "big.bin"), "rb") as handle:
+                handle.seek(4 * 1024 * 1024)
+                self.assertEqual(handle.read(1), b"C")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+
+    def test_junction_create_failure_restores_source(self):
+        src = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(src, "keep.txt"), "w", encoding="utf-8") as handle:
+                handle.write("intact")
+
+            def robocopy(source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                for name in list(os.listdir(source)):
+                    sp = os.path.join(source, name)
+                    if os.path.isfile(sp) and not os.path.islink(sp):
+                        shutil.copy2(sp, os.path.join(dest, name))
+                return 0
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
+                    mock.patch.object(migrate, "is_junction", return_value=False), \
+                    mock.patch.object(migrate, "create_junction",
+                                      side_effect=migrate.MigrateError("联接失败")):
+                with self.assertRaises(migrate.MigrateError):
+                    migrate.migrate(src, dest_root)
+            with open(os.path.join(src, "keep.txt"), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "intact")
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+
+    def test_delete_refuses_parent_swapped_to_symlink(self):
+        folder = tempfile.mkdtemp()
+        try:
+            allowed = os.path.join(folder, "allowed")
+            outside = os.path.join(folder, "outside")
+            os.makedirs(allowed)
+            os.makedirs(outside)
+            secret = os.path.join(outside, "victim.txt")
+            with open(secret, "w", encoding="utf-8") as handle:
+                handle.write("keep-outside")
+            link = os.path.join(folder, "link")
+            os.symlink(outside, link)
+            cat = type("C", (), {
+                "key": "t", "name": "t", "kind": "files",
+                "paths": [link], "patterns": ("*",), "prune_dirs": False,
+                "untrusted": False,
+            })()
+            cleaner.clean_category(cat)
+            self.assertTrue(os.path.exists(secret))
+            with open(secret, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "keep-outside")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_unlink_rechecks_parent_immediately_before_delete(self):
+        folder = tempfile.mkdtemp()
+        try:
+            allowed = os.path.join(folder, "allowed")
+            outside = os.path.join(folder, "outside")
+            os.makedirs(allowed)
+            os.makedirs(outside)
+            victim = os.path.join(allowed, "victim.txt")
+            secret = os.path.join(outside, "victim.txt")
+            with open(victim, "w", encoding="utf-8") as handle:
+                handle.write("local")
+            with open(secret, "w", encoding="utf-8") as handle:
+                handle.write("secret")
+            real_remove = os.remove
+
+            def raced_remove(path):
+                parent = os.path.dirname(path)
+                if os.path.basename(path) == "victim.txt" and not os.path.islink(parent):
+                    os.rename(parent, parent + ".moved")
+                    os.symlink(outside, parent)
+                real_remove(path)
+
+            cat = type("C", (), {"key": "t", "name": "t"})()
+            result = cleaner.CleanResult(cat)
+            with mock.patch("cleaner.os.remove", side_effect=raced_remove):
+                cleaner._delete_file(victim, [allowed], ("*",), result)
+            self.assertFalse(os.path.lexists(victim))
+            self.assertTrue(os.path.isdir(allowed))
+            self.assertFalse(os.path.islink(allowed))
+            self.assertTrue(os.path.exists(secret))
+            with open(secret, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "secret")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_fastscan_rejects_symlink_root(self):
+        import fastscan
+        folder = tempfile.mkdtemp()
+        try:
+            real = os.path.join(folder, "real")
+            os.makedirs(real)
+            with open(os.path.join(real, "secret.txt"), "w", encoding="utf-8") as handle:
+                handle.write("x")
+            link = os.path.join(folder, "link")
+            os.symlink(real, link, target_is_directory=True)
+            found = fastscan.iter_files(link, min_size=0)
+            self.assertEqual(found, [])
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
 class FragVizTests(unittest.TestCase):
     def test_grid_follows_real_percentage(self):
         text = """
