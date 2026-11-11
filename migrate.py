@@ -3,7 +3,8 @@
 安全策略：
 1. 先完整复制到目标盘，并用整文件 SHA-256 校验。
 2. 把源目录改名为备份，再建立联接并确认联接能解析。
-3. 只有联接校验通过才删除备份。任一步失败都把备份放回原路径。
+3. 只删除清单中的文件：打开后在同一个句柄上核对大小和摘要，匹配才删除。
+   清单外或对不上的文件留在备份里，结果记为部分完成。
 任何一步失败都不会丢数据：目标副本在建立联接前一直保留。
 """
 import ctypes
@@ -237,52 +238,283 @@ def _manifest(root: str) -> dict:
     return found
 
 
-def _backup_matches(root: str, manifest: dict) -> bool:
-    """删除备份前再走一遍：路径、大小、mtime，变化的文件重算整文件摘要。"""
-    if not root or os.path.islink(root) or not os.path.isdir(root) or safepath.is_reparse_point(root):
+class MigrateResult:
+    """搬家结果。status 为 ok 才表示备份里已核对的文件都已删除。"""
+
+    def __init__(self, src, dest, status="ok", backup="", remaining=()):
+        self.src = src
+        self.dest = dest
+        self.status = status
+        self.backup = backup or ""
+        self.remaining = tuple(remaining)
+        if status == "ok":
+            self.warning = ""
+        else:
+            lines = ["部分完成，未校验的内容仍留在备份里。", f"备份位置：{self.backup}"]
+            lines.extend(self.remaining)
+            self.warning = "\n".join(lines)
+
+    @property
+    def ok(self):
+        return self.status == "ok"
+
+    def __iter__(self):
+        yield self.src
+        yield self.dest
+
+
+def _hash_fd(fd) -> str:
+    os.lseek(fd, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    while True:
+        block = os.read(fd, 1024 * 1024)
+        if not block:
+            break
+        digest.update(block)
+    return digest.hexdigest()
+
+
+def _open_parent_dirfd(parent: str):
+    """从根目录逐级 O_NOFOLLOW 打开父目录，返回 dirfd。调用方负责关闭。"""
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    absolute = os.path.abspath(parent)
+    parts = [part for part in absolute.split(os.sep) if part]
+    dirfd = os.open(os.sep, flags)
+    try:
+        for part in parts:
+            nxt = os.open(part, flags, dir_fd=dirfd)
+            os.close(dirfd)
+            dirfd = nxt
+            if not stat.S_ISDIR(os.fstat(dirfd).st_mode):
+                raise OSError("父目录不是普通目录")
+        owned = dirfd
+        dirfd = None
+        return owned
+    finally:
+        if dirfd is not None:
+            os.close(dirfd)
+
+
+def _verified_unlink(path: str, expected_size: int, expected_hash: str) -> bool:
+    """打开后在同一个句柄上核对大小、身份和整文件摘要，匹配才删除。
+
+    不匹配或打不开就留下文件。POSIX 上 unlinkat 仍按名字删除，
+    最后一次核对和 unlink 之间的空隙无法在纯 Python 里关掉。
+    """
+    if os.name == "nt":
+        return _verified_unlink_windows(path, expected_size, expected_hash)
+    parent = os.path.dirname(path) or "."
+    name = os.path.basename(path)
+    try:
+        dirfd = _open_parent_dirfd(parent)
+    except OSError:
         return False
-    base = os.path.abspath(root)
-    found = {}
-    dirs = set()
-    stack = [base]
+    try:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        try:
+            fd = os.open(name, flags, dir_fd=dirfd)
+        except OSError:
+            return False
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                return False
+            if getattr(info, "st_file_attributes", 0) & safepath.FILE_ATTRIBUTE_REPARSE_POINT:
+                return False
+            if info.st_size != expected_size:
+                return False
+            if _hash_fd(fd) != expected_hash:
+                return False
+            again = os.fstat(fd)
+            try:
+                named = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
+            except OSError:
+                return False
+            if (again.st_dev != info.st_dev or again.st_ino != info.st_ino
+                    or again.st_size != expected_size
+                    or named.st_dev != info.st_dev or named.st_ino != info.st_ino):
+                return False
+            os.unlink(name, dir_fd=dirfd)
+            return True
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dirfd)
+
+
+def _verified_unlink_windows(path: str, expected_size: int, expected_hash: str) -> bool:
+    """不共享写权限地打开，核对句柄后用 FILE_DISPOSITION_INFO 删除。"""
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.restype = ctypes.c_void_p
+    kernel.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    kernel.GetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel.GetFileInformationByHandle.restype = wintypes.BOOL
+    kernel.ReadFile.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
+    ]
+    kernel.ReadFile.restype = wintypes.BOOL
+    kernel.SetFilePointerEx.argtypes = [
+        wintypes.HANDLE, ctypes.c_longlong, ctypes.c_void_p, wintypes.DWORD,
+    ]
+    kernel.SetFilePointerEx.restype = wintypes.BOOL
+    kernel.SetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE, ctypes.c_uint, ctypes.c_void_p, wintypes.DWORD,
+    ]
+    kernel.SetFileInformationByHandle.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    delete_access = 0x00010000
+    generic_read = 0x80000000
+    share_read = 0x1  # 不包含 FILE_SHARE_WRITE，哈希到删除期间拒绝别人写入
+    open_existing = 3
+    flag = 0x00200000  # FILE_FLAG_OPEN_REPARSE_POINT
+    handle = kernel.CreateFileW(
+        str(path), delete_access | generic_read, share_read, None,
+        open_existing, flag, None)
+    invalid = ctypes.c_void_p(-1).value
+    if not handle or handle in (invalid, -1):
+        return False
+
+    class _ByHandle(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    class _Disposition(ctypes.Structure):
+        _fields_ = [("DeleteFile", wintypes.BOOLEAN)]
+
+    def _identity(info):
+        size = (info.nFileSizeHigh << 32) | info.nFileSizeLow
+        file_id = (info.nFileIndexHigh << 32) | info.nFileIndexLow
+        return info.dwFileAttributes, info.dwVolumeSerialNumber, file_id, size
+
+    try:
+        info = _ByHandle()
+        if not kernel.GetFileInformationByHandle(handle, ctypes.byref(info)):
+            return False
+        attributes, volume, file_id, size = _identity(info)
+        if attributes & safepath.FILE_ATTRIBUTE_REPARSE_POINT or size != expected_size:
+            return False
+        if not kernel.SetFilePointerEx(handle, 0, None, 0):
+            return False
+        digest = hashlib.sha256()
+        if size:
+            buf = ctypes.create_string_buffer(1024 * 1024)
+            pending = size
+            got = wintypes.DWORD(0)
+            while pending > 0:
+                chunk = min(len(buf), pending)
+                if not kernel.ReadFile(handle, buf, chunk, ctypes.byref(got), None) or not got.value:
+                    return False
+                digest.update(buf.raw[:got.value])
+                pending -= got.value
+        if digest.hexdigest() != expected_hash:
+            return False
+        again = _ByHandle()
+        if not kernel.GetFileInformationByHandle(handle, ctypes.byref(again)):
+            return False
+        attributes2, volume2, file_id2, size2 = _identity(again)
+        if (attributes2 & safepath.FILE_ATTRIBUTE_REPARSE_POINT
+                or volume2 != volume or file_id2 != file_id or size2 != expected_size):
+            return False
+        mark = _Disposition(True)
+        if not kernel.SetFileInformationByHandle(handle, 4, ctypes.byref(mark), ctypes.sizeof(mark)):
+            return False
+        return True
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def _rmdir_if_empty(path: str) -> bool:
+    """只对空目录调用 rmdir，不递归删除里面的文件。"""
+    if os.path.islink(path) or safepath.is_reparse_point(path):
+        return False
+    try:
+        os.rmdir(path)
+        return True
+    except OSError:
+        return False
+
+
+def _directories_deepest_first(root: str):
+    dirs = []
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        dirs.append(current)
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    dirs.sort(key=len, reverse=True)
+    return dirs
+
+
+def _list_remaining(root: str):
+    if not root or not os.path.lexists(root):
+        return []
+    if os.path.islink(root) or not os.path.isdir(root):
+        return [root]
+    found = []
+    stack = [os.path.abspath(root)]
     while stack:
         current = stack.pop()
         try:
             entries = list(os.scandir(current))
         except OSError:
-            return False
+            continue
         for entry in entries:
-            if utils.is_link_like(entry):
-                return False
-            rel = os.path.relpath(entry.path, base)
             try:
-                if entry.is_dir(follow_symlinks=False):
-                    dirs.add(rel)
-                    stack.append(entry.path)
-                elif entry.is_file(follow_symlinks=False):
-                    found[rel] = entry.stat(follow_symlinks=False)
+                if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+                    found.append(entry.path)
                 else:
-                    return False
+                    stack.append(entry.path)
             except OSError:
-                return False
-    if set(found) != set(manifest or {}):
-        return False
-    expected_dirs = set()
-    for rel in manifest or {}:
-        parent = os.path.dirname(rel)
-        while parent and parent not in (os.curdir,):
-            expected_dirs.add(parent)
-            parent = os.path.dirname(parent)
-    if dirs != expected_dirs:
-        return False
-    for rel, info in found.items():
-        size, mtime, digest = manifest[rel]
-        now_mtime = getattr(info, "st_mtime_ns", int(info.st_mtime * 1_000_000_000))
-        again = _fingerprint(os.path.join(base, rel))
-        if (info.st_size != size or now_mtime != mtime
-                or again is None or again != (size, digest)):
-            return False
-    return True
+                found.append(entry.path)
+    return found
+
+
+def _release_manifest(backup: str, manifest: dict):
+    """只删除清单里、且句柄核对通过的文件。其余留下。"""
+    for rel, mark in (manifest or {}).items():
+        size, _mtime, digest = mark
+        _verified_unlink(os.path.join(backup, rel), size, digest)
+    if os.path.isdir(backup) and not os.path.islink(backup):
+        for directory in _directories_deepest_first(backup):
+            _rmdir_if_empty(directory)
+    return _list_remaining(backup)
 
 
 def file_inventory(root: str) -> dict:
@@ -324,7 +556,7 @@ def _rollback_to_source(src: str, dest: str):
 
 
 def migrate(src: str, dest_root: str, log=lambda _message: None):
-    """把 src 迁移到 dest_root 下并建立联接。返回 (src, dest)。"""
+    """把 src 迁移到 dest_root 下并建立联接。返回 MigrateResult。"""
     src, dest = validate(src, dest_root)
 
     log(f"复制 {src}")
@@ -356,12 +588,12 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
             remove_tree(dest)
         raise MigrateError(
             "建立联接失败，源目录已还原，数据未丢失") from exc
-    if not _backup_matches(backup, fresh_manifest):
-        raise MigrateError(
-            "备份在删除前发生变化，已保留备份，没有删除未校验的内容：" + backup)
-    remove_tree(backup)
+    remaining = _release_manifest(backup, fresh_manifest)
+    if remaining:
+        log(f"备份里还有未删除的内容：{backup}")
+        return MigrateResult(src, dest, status="partial", backup=backup, remaining=remaining)
     log(f"已建立联接：{src} → {dest}")
-    return src, dest
+    return MigrateResult(src, dest, status="ok")
 
 
 def _restore_renamed_source(src: str, backup: str):
@@ -612,28 +844,10 @@ def migrate_file(src: str, dest_root: str, log=lambda _message: None, linker=Non
     backup = src + ".migrate-bak"
     if os.path.lexists(backup):
         raise MigrateError(f"备份位置已存在，已停止：{backup}")
-    snapshot = os.lstat(src)
     os.rename(src, backup)
-    try:
-        now = os.lstat(backup)
-        before_mtime = getattr(snapshot, "st_mtime_ns", int(snapshot.st_mtime * 1_000_000_000))
-        now_mtime = getattr(now, "st_mtime_ns", int(now.st_mtime * 1_000_000_000))
-        changed = (
-            stat.S_ISLNK(now.st_mode)
-            or not stat.S_ISREG(now.st_mode)
-            or now.st_size != snapshot.st_size
-            or now_mtime != before_mtime
-            or now.st_dev != snapshot.st_dev
-            or now.st_ino != snapshot.st_ino
-        )
-        checked = _fingerprint(backup)
-        if changed or checked is None or checked != copied:
-            raise MigrateError(f"源文件在删除前已变化，备份已保留：{backup}")
-        safepath.unlink_regular(backup, [os.path.dirname(backup) or "."])
-    except MigrateError:
-        raise
-    except OSError as exc:
-        raise MigrateError(f"无法移走源文件，备份已保留：{backup}") from exc
+    if not _verified_unlink(backup, copied[0], copied[1]):
+        return MigrateResult(
+            src, dest, status="partial", backup=backup, remaining=(backup,))
 
     try:
         _link_file(dest, src, linker)
@@ -642,4 +856,4 @@ def migrate_file(src: str, dest_root: str, log=lambda _message: None, linker=Non
             raise MigrateError("无法在原位置建立链接，已还原源文件") from exc
         raise MigrateError(f"链接失败且无法还原，文件仍在：{dest}") from exc
     log(f"已搬家：{src} → {dest}")
-    return src, dest
+    return MigrateResult(src, dest, status="ok")

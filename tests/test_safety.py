@@ -1129,15 +1129,14 @@ class FifthReviewTests(unittest.TestCase):
                     mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
                     mock.patch.object(migrate, "is_junction", return_value=False), \
                     mock.patch.object(migrate, "create_junction", side_effect=plant_and_link):
-                with self.assertRaises(migrate.MigrateError):
-                    migrate.migrate(src, dest_root)
+                result = migrate.migrate(src, dest_root)
             backup = src.rstrip("\\/") + ".migrate-bak"
             extra = os.path.join(backup, "extra.txt")
             self.assertTrue(os.path.isfile(extra))
             with open(extra, encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), "added-during-window")
-            with open(os.path.join(backup, "keep.txt"), encoding="utf-8") as handle:
-                self.assertEqual(handle.read(), "original")
+            self.assertFalse(self._succeeded(result))
+            self.assertIn(".migrate-bak", getattr(result, "backup", ""))
         finally:
             shutil.rmtree(src, ignore_errors=True)
             shutil.rmtree(dest_root, ignore_errors=True)
@@ -1164,14 +1163,100 @@ class FifthReviewTests(unittest.TestCase):
 
             with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
                     mock.patch.object(migrate, "_fingerprint", side_effect=fingerprint):
-                with self.assertRaises(migrate.MigrateError):
-                    migrate.migrate_file(src, dest_root)
+                result = migrate.migrate_file(src, dest_root)
+            self.assertFalse(self._succeeded(result))
             backup = src + ".migrate-bak"
             self.assertTrue(os.path.isfile(backup))
             with open(backup, "rb") as handle:
                 self.assertEqual(handle.read(), b"0123456789X")
             with open(os.path.join(dest_root, "movie.bin"), "rb") as handle:
                 self.assertEqual(handle.read(), b"0123456789")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+
+    def _succeeded(self, result):
+        if isinstance(result, tuple):
+            return True
+        return bool(getattr(result, "ok", False))
+
+    def test_file_added_before_rmdir_survives_and_is_not_success(self):
+        src = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(src, "keep.txt"), "w", encoding="utf-8") as handle:
+                handle.write("original")
+
+            def robocopy(source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                for name in list(os.listdir(source)):
+                    sp = os.path.join(source, name)
+                    if os.path.isfile(sp) and not os.path.islink(sp):
+                        shutil.copy2(sp, os.path.join(dest, name))
+                return 0
+
+            def link(link_path, target):
+                os.symlink(target, link_path, target_is_directory=True)
+
+            real_rmdir = os.rmdir
+
+            def rmdir(path, *args, **kwargs):
+                if str(path).rstrip("\\/").endswith(".migrate-bak"):
+                    extra = os.path.join(path, "extra.txt")
+                    if not os.path.exists(extra):
+                        with open(extra, "w", encoding="utf-8") as handle:
+                            handle.write("added-before-rmdir")
+                return real_rmdir(path, *args, **kwargs)
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
+                    mock.patch.object(migrate, "is_junction", return_value=False), \
+                    mock.patch.object(migrate, "create_junction", side_effect=link), \
+                    mock.patch("migrate.os.rmdir", side_effect=rmdir):
+                result = migrate.migrate(src, dest_root)
+            extra = os.path.join(src.rstrip("\\/") + ".migrate-bak", "extra.txt")
+            self.assertTrue(os.path.isfile(extra))
+            with open(extra, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "added-before-rmdir")
+            self.assertFalse(self._succeeded(result))
+            self.assertIn("extra.txt", " ".join(getattr(result, "remaining", ())))
+            self.assertIn(".migrate-bak", getattr(result, "backup", ""))
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+            shutil.rmtree(src.rstrip("\\/") + ".migrate-bak", ignore_errors=True)
+
+    def test_append_at_delete_survives_and_is_not_success(self):
+        folder = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp(prefix="dest-")
+        try:
+            src = os.path.join(folder, "movie.bin")
+            with open(src, "wb") as handle:
+                handle.write(b"0123456789")
+            backup = src + ".migrate-bak"
+            real_open = os.open
+            did = {"n": 0}
+
+            def hooked_open(path, flags, *args, **kwargs):
+                name = os.path.basename(str(path))
+                directory = bool(flags & getattr(os, "O_DIRECTORY", 0))
+                if name == os.path.basename(backup) and not directory and not did["n"]:
+                    did["n"] = 1
+                    with open(backup, "ab") as handle:
+                        handle.write(b"APPENDED")
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
+                    mock.patch("safepath.os.open", side_effect=hooked_open), \
+                    mock.patch("migrate.os.open", side_effect=hooked_open):
+                result = migrate.migrate_file(src, dest_root)
+            self.assertTrue(os.path.isfile(backup))
+            with open(backup, "rb") as handle:
+                self.assertEqual(handle.read(), b"0123456789APPENDED")
+            with open(os.path.join(dest_root, "movie.bin"), "rb") as handle:
+                self.assertEqual(handle.read(), b"0123456789")
+            self.assertFalse(self._succeeded(result))
+            self.assertIn(backup, getattr(result, "remaining", ()))
         finally:
             shutil.rmtree(folder, ignore_errors=True)
             shutil.rmtree(dest_root, ignore_errors=True)

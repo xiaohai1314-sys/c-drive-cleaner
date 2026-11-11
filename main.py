@@ -1287,8 +1287,11 @@ class App(tk.Tk):
             ok, errors = [], []
             for path in paths:
                 try:
-                    migrate.migrate_file(path, dest)
-                    ok.append(path)
+                    result = migrate.migrate_file(path, dest)
+                    if result.ok:
+                        ok.append(path)
+                    else:
+                        errors.append(f"{os.path.basename(path)}：{result.warning}")
                 except Exception as exc:
                     errors.append(f"{os.path.basename(path)}：{exc}")
             self._mig_running = False
@@ -2093,9 +2096,12 @@ class App(tk.Tk):
 
     def _mig_worker(self, src, dest):
         try:
-            migrate.migrate(src, dest)
+            result = migrate.migrate(src, dest)
             self._mig_running = False
-            self.queue.put(("mig_done", True, src))
+            if result.ok:
+                self.queue.put(("mig_done", True, src))
+            else:
+                self.queue.put(("mig_done", "partial", result.warning))
         except Exception as exc:
             self._mig_running = False
             self.queue.put(("mig_done", False, str(exc)))
@@ -2254,8 +2260,11 @@ class App(tk.Tk):
             self._render_mig(message[1])
         elif kind == "mig_done":
             self.worker = None
-            if message[1]:
+            if message[1] is True:
                 messagebox.showinfo("完成", f"已处理：{message[2]}")
+                self.start_migrate_scan()
+            elif message[1] == "partial":
+                messagebox.showwarning("未完全完成", message[2])
                 self.start_migrate_scan()
             else:
                 messagebox.showerror("失败", message[2])
