@@ -65,12 +65,16 @@ def _clean_reg_leftovers(cat, result, log):
         if not sep or hive not in ("HKCU", "HKLM") or not rel:
             result.skipped += 1
             continue
+        if not registry.is_leaf_key_at(hive, rel):
+            result.skipped += 1
+            result.errors.append(f"包含子键或无法确认键结构，已跳过：{hive}\\{rel}")
+            continue
         label = rel.rsplit("\\", 1)[-1]
         if not registry.backup_hive_key(hive, rel, label):
             result.skipped += 1
             result.errors.append(f"备份失败，已跳过：{hive}\\{rel}")
             continue
-        if registry.delete_tree_at(hive, rel):
+        if registry.delete_leaf_key_at(hive, rel):
             result.deleted += 1
         else:
             result.skipped += 1

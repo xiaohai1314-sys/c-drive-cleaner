@@ -81,6 +81,11 @@ class _FakeWinreg:
 
     def OpenKey(self, root, path, _reserved=0, _access=0):
         try:
+            if isinstance(root, _FakeKey):
+                node = root.node
+                for part in path.split("\\") if path else ():
+                    node = node[part]
+                return _FakeKey(node)
             return _FakeKey(self._node(root, path))
         except KeyError:
             raise OSError("missing")
@@ -94,7 +99,12 @@ class _FakeWinreg:
     def DeleteKey(self, parent_key, subkey):
         if subkey not in parent_key.node:
             raise OSError("missing")
+        if parent_key.node[subkey]:
+            raise OSError("key has subkeys")
         del parent_key.node[subkey]
+
+    def QueryInfoKey(self, key):
+        return len(key.node), 0, 0
 
 
 class DeleteTreeAtTests(unittest.TestCase):
@@ -105,6 +115,43 @@ class DeleteTreeAtTests(unittest.TestCase):
             self.assertTrue(registry.delete_tree_at("HKLM", r"Software\Old\Thing"))
             self.assertFalse(registry.delete_tree_at("HKLM", r"Software\Old\Thing"))
         self.assertEqual(fake.trees["HKLM"], {"Software": {"Old": {}}})
+
+
+class DeleteLeafKeyTests(unittest.TestCase):
+    def test_deletes_only_leaf_key(self):
+        fake = _FakeWinreg()
+        fake.trees["HKCU"] = {
+            "Software": {"Vendor": {"Product": {}}, "Other": {}}}
+        with mock.patch.object(registry, "winreg", fake):
+            self.assertTrue(registry.is_leaf_key_at(
+                "HKCU", r"Software\Vendor\Product"))
+            self.assertTrue(registry.delete_leaf_key_at(
+                "HKCU", r"Software\Vendor\Product"))
+        self.assertEqual(fake.trees["HKCU"]["Software"]["Vendor"], {})
+        self.assertIn("Other", fake.trees["HKCU"]["Software"])
+
+    def test_delete_leaf_key_refuses_nested_key(self):
+        fake = _FakeWinreg()
+        fake.trees["HKCU"] = {
+            "Software": {"Vendor": {"Product": {"Settings": {"Keep": {}}}}}}
+        with mock.patch.object(registry, "winreg", fake):
+            self.assertFalse(registry.is_leaf_key_at(
+                "HKCU", r"Software\Vendor\Product"))
+            self.assertFalse(registry.delete_leaf_key_at(
+                "HKCU", r"Software\Vendor\Product"))
+        self.assertIn("Settings", fake.trees["HKCU"]["Software"]["Vendor"]["Product"])
+        self.assertIn("Keep", fake.trees["HKCU"]["Software"]["Vendor"]
+                      ["Product"]["Settings"])
+
+    def test_deletekey_refuses_child_added_after_leaf_check(self):
+        fake = _FakeWinreg()
+        fake.trees["HKCU"] = {
+            "Software": {"Vendor": {"Product": {"Settings": {}}}}}
+        with mock.patch.object(registry, "winreg", fake), \
+                mock.patch.object(registry, "is_leaf_key_at", return_value=True):
+            self.assertFalse(registry.delete_leaf_key_at(
+                "HKCU", r"Software\Vendor\Product"))
+        self.assertIn("Settings", fake.trees["HKCU"]["Software"]["Vendor"]["Product"])
 
     def test_backup_hive_key_export_failure(self):
         fake = _FakeWinreg()
@@ -125,14 +172,35 @@ class CleanRegLeftoversTests(unittest.TestCase):
         def fake_backup(hive, _rel, _label):
             return hive == "HKCU"
 
-        with mock.patch.object(registry, "backup_hive_key", side_effect=fake_backup), \
-                mock.patch.object(registry, "delete_tree_at", return_value=True) as deleter, \
+        with mock.patch.object(registry, "is_leaf_key_at", return_value=True), \
+                mock.patch.object(registry, "backup_hive_key", side_effect=fake_backup), \
+                mock.patch.object(registry, "delete_leaf_key_at", return_value=True) as deleter, \
                 mock.patch.object(registry, "last_backup_info",
                                   return_value={"dir": "D", "failed": []}):
             result = cleaner.clean_category(cat)
         self.assertEqual(result.deleted, 1)
         self.assertEqual(result.skipped, 1)
         deleter.assert_called_once_with("HKCU", r"Software\GhostSoft\GhostApp")
+
+    def test_cleaner_skips_nested_candidate_before_backup(self):
+        fake = _FakeWinreg()
+        fake.trees["HKCU"] = {
+            "Software": {"Vendor": {"Product": {"Settings": {"Keep": {}}}}}}
+        cat = categories.Category(
+            key="reg_leftovers", name="t", tier="deep", kind="regleftover",
+            describe="", paths=[r"HKCU::Software\Vendor\Product"])
+        with mock.patch.object(registry, "winreg", fake), \
+                mock.patch.object(registry, "backup_hive_key", return_value=True) as backup, \
+                mock.patch.object(registry, "last_backup_info",
+                                  return_value={"dir": "", "failed": []}):
+            result = cleaner.clean_category(cat)
+        backup.assert_not_called()
+        self.assertEqual(result.deleted, 0)
+        self.assertEqual(result.skipped, 1)
+        self.assertIn("子键", " ".join(result.errors))
+        self.assertIn("Settings", fake.trees["HKCU"]["Software"]["Vendor"]["Product"])
+        self.assertIn("Keep", fake.trees["HKCU"]["Software"]["Vendor"]
+                      ["Product"]["Settings"])
 
     def test_scan_counts_keys(self):
         cat = categories.Category(

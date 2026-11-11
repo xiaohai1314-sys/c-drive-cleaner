@@ -279,6 +279,36 @@ def restore_backup(hive, path):
     return proc.returncode == 0
 
 
+def is_leaf_key_at(hive, path):
+    """只在能确认目标键没有子键时返回 True；任何查询失败均按不安全处理。"""
+    root = _hive_root(hive)
+    if root is None or not path:
+        return False
+    try:
+        with winreg.OpenKey(root, path, 0, winreg.KEY_READ) as key:
+            return winreg.QueryInfoKey(key)[0] == 0
+    except (OSError, AttributeError):
+        return False
+
+
+def delete_leaf_key_at(hive, path):
+    """只删除一个无子键目标；使用 DeleteKey，绝不递归删除后代。"""
+    root = _hive_root(hive)
+    if root is None or not is_leaf_key_at(hive, path):
+        return False
+    parent_path, _sep, subkey = path.rpartition("\\")
+    if not subkey:
+        return False
+    try:
+        with winreg.OpenKey(root, parent_path, 0, winreg.KEY_ALL_ACCESS) as parent:
+            # Windows 的 DeleteKey 会拒绝仍含子键的目标；这也防止扫描后
+            # 新增子键时意外删除整棵子树。
+            winreg.DeleteKey(parent, subkey)
+    except (OSError, AttributeError):
+        return False
+    return not _key_exists_in(hive, path)
+
+
 def delete_tree_at(hive, path):
     """递归删除 hive 下的一个键。删掉并确认已消失返回 True。
 

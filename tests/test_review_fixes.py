@@ -65,8 +65,9 @@ class RestoreOnFailureTests(unittest.TestCase):
         cat = categories.Category(
             key="reg_leftovers", name="t", tier="deep", kind="regleftover",
             describe="", paths=[r"HKCU::Software\Ghost\GhostApp"])
-        with mock.patch.object(registry, "backup_hive_key", return_value=True), \
-                mock.patch.object(registry, "delete_tree_at", return_value=False), \
+        with mock.patch.object(registry, "is_leaf_key_at", return_value=True), \
+                mock.patch.object(registry, "backup_hive_key", return_value=True), \
+                mock.patch.object(registry, "delete_leaf_key_at", return_value=False), \
                 mock.patch.object(registry, "restore_backup", return_value=True) as restore, \
                 mock.patch.object(registry, "last_backup_info",
                                   return_value={"dir": "D", "failed": []}):
