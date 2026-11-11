@@ -34,29 +34,58 @@ def load_config():
 
 
 def validate_url(url) -> str:
-    """合法时返回空串。只允许 http 和 https。"""
+    """合法时返回空串。远程规则只允许 https，避免被篡改。"""
     if not url or not isinstance(url, str):
         return "未配置规则更新地址（在 rules_update.json 里填写 url）"
     parsed = urllib.parse.urlparse(url.strip())
-    if parsed.scheme not in ("http", "https"):
-        return "规则地址只允许 http 或 https"
+    if parsed.scheme != "https":
+        return "规则地址只允许 https"
     if not parsed.netloc or any(char in parsed.netloc for char in " \t\r\n"):
         return "规则地址无效"
     return ""
 
 
-def _bad_path(path) -> str:
+_CACHE_PARTS = {
+    "temp", "tmp", "cache", "caches", "log", "logs",
+    "code cache", "gpucache", "gpu cache", "htmlcache",
+}
+_LIBRARY_PARTS = {
+    "documents", "desktop", "downloads", "my documents",
+    "文档", "桌面", "下载",
+}
+
+
+def remote_target_allowed(path: str) -> str:
+    """远程规则只能指向临时目录或缓存目录。返回错误说明，合法时为空串。"""
     if not isinstance(path, str) or not path.strip():
         return "路径为空"
     if len(path) > 500 or any(ord(char) < 32 for char in path):
         return "路径含有非法字符"
-    parts = path.replace("/", "\\").split("\\")
-    if ".." in parts:
+    raw = path.replace("/", "\\")
+    parts = [part for part in raw.split("\\") if part]
+    lowered = [part.lower() for part in parts]
+    if ".." in lowered:
         return "路径不能包含 .."
-    name = os.path.basename(path.replace("/", "\\")).lower()
+    if any(part in _LIBRARY_PARTS for part in lowered):
+        return "远程规则不能指向文档、桌面或下载"
+    if safepath.is_user_library(path) or safepath.is_user_library(os.path.expandvars(path)):
+        return "远程规则不能指向文档、桌面或下载"
+    name = os.path.basename(raw).lower()
     if name in safepath.PASSWORD_FILENAMES or "login data" in name:
         return "远程规则不能删除浏览器密码库"
+    folded = raw.lower()
+    temp_root = folded.startswith("%temp%") or folded.startswith("%tmp%")
+    cache_part = any(part in _CACHE_PARTS for part in lowered)
+    if not temp_root and not cache_part:
+        return "远程规则只能指向临时目录或缓存目录"
+    expanded = os.path.expandvars(path)
+    if safepath.is_system_path(expanded) and "temp" not in lowered and "tmp" not in lowered:
+        return "远程规则不能指向系统目录"
     return ""
+
+
+def _bad_path(path) -> str:
+    return remote_target_allowed(path)
 
 
 def validate_remote_rule(item) -> str:

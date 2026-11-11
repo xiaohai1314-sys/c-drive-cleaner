@@ -25,6 +25,7 @@ import registry
 import ruleupdate
 import safepath
 import scanner
+import scanjobs
 import shredder
 import utils
 import look
@@ -193,6 +194,7 @@ class App(tk.Tk):
         self._mig_running = False
         self._im_running = {"wechat": False, "qq": False}
         self._frag_running = False
+        self.jobs = scanjobs.ScanJobs()
         self.scan_complete = False
         self._screenshot = os.environ.get("CLEANER_SCREENSHOT") == "1"
         self.big_type = "all"
@@ -764,7 +766,7 @@ class App(tk.Tk):
             self.frag_values[key] = value
         legend = tk.Frame(parent, bg=WHITE)
         legend.pack(fill="x", padx=30)
-        tk.Label(legend, text="映射颜色", bg=WHITE, fg=MUTED,
+        tk.Label(legend, text="示意（按碎片率上色，不是磁盘簇的真实布局）", bg=WHITE, fg=MUTED,
                  font=("Microsoft YaHei UI", 8)).pack(side="right")
         tk.Label(legend, text="  碎片", bg=WHITE, fg="#2f9bf0",
                  font=("Microsoft YaHei UI", 8)).pack(side="right")
@@ -1033,20 +1035,19 @@ class App(tk.Tk):
         self.start_big_scan()
 
     def start_big_scan(self):
-        if self._big_running:
-            return
+        gen = self.jobs.start("big")
+        scope = self.big_scope.get()
         self._big_running = True
         self.big_sub.configure(text="正在扫描所选范围的大文件…")
-        threading.Thread(target=self._big_worker, daemon=True).start()
+        threading.Thread(target=self._big_worker, args=(gen, scope), daemon=True).start()
 
-    def _big_worker(self):
-        scope = self.big_scope.get()
+    def _big_worker(self, gen, scope):
         drives = utils.fixed_drives() if scope == "全部磁盘" else [scope]
         rows = []
         for drive in drives:
-            self.queue.put(("big_progress", drive))
+            self.queue.put(("big_progress", gen, drive))
             try:
-                found = scanner.scan_large_files(drive, min_size=100 * 1024 * 1024, limit=500)
+                found = scanner.scan_large_files(drive, min_size=100 * 1024 * 1024, limit=None)
             except Exception:
                 continue
             for path, size in found:
@@ -1061,8 +1062,7 @@ class App(tk.Tk):
         rows = [row for row in rows
                 if os.path.basename(row[0]).lower() not in system_names
                 and not safepath.is_protected_path(row[0])]
-        self._big_running = False
-        self.queue.put(("big_rows", rows[:300]))
+        self.queue.put(("big_rows", gen, rows))
 
     def _toggle_big_path(self, path, checked):
         if checked:
@@ -1103,6 +1103,7 @@ class App(tk.Tk):
             return size
 
         visible.sort(key=sort_value, reverse=self.big_sort_desc)
+        self.big_checked &= {item[0] for item in visible}
         table_rows = []
         for path, size, mtime in visible:
             table_rows.append({
@@ -1149,6 +1150,9 @@ class App(tk.Tk):
     def _delete_big(self):
         if self._cleaning or self._big_running:
             return
+        disk = self.big_disk_filter.get() if getattr(self, "big_disk_filter", None) else "全部"
+        visible = set(scanner.visible_large_paths(self.big_rows, self.big_type, disk))
+        self.big_checked &= visible
         paths = [path for path in self.big_checked if not safepath.is_protected_path(path)]
         if not paths:
             messagebox.showinfo("提示", "请先勾选要清理的大文件。系统文件不会被勾选删除。")
@@ -1207,15 +1211,14 @@ class App(tk.Tk):
         tk.Entry(dest, textvariable=self.bigmove_dest, width=42).pack(side="left", padx=8)
 
     def start_bigmove_scan(self):
-        if self._big_running:
-            return
+        gen = self.jobs.start("bigmove")
         self._big_running = True
         if getattr(self, "bigmove_sub", None):
             self.bigmove_sub.configure(text="正在查找 C 盘大文件…")
 
-        def work():
+        def work(generation):
             try:
-                found = scanner.scan_large_files("C:\\", min_size=100 * 1024 * 1024, limit=200)
+                found = scanner.scan_large_files("C:\\", min_size=100 * 1024 * 1024, limit=None)
             except Exception:
                 found = []
             rows = []
@@ -1227,10 +1230,9 @@ class App(tk.Tk):
                 except OSError:
                     mtime = 0
                 rows.append((path, size, mtime))
-            self._big_running = False
-            self.queue.put(("bigmove_rows", rows))
+            self.queue.put(("bigmove_rows", generation, rows))
 
-        threading.Thread(target=work, daemon=True).start()
+        threading.Thread(target=work, args=(gen,), daemon=True).start()
 
     def _render_bigmove(self):
         tree = getattr(self, "bigmove_tree", None)
@@ -1341,16 +1343,25 @@ class App(tk.Tk):
         self._render_dup()
         self.start_dup_scan()
 
+    def _dup_kinds(self):
+        kinds = set()
+        for key, var in self.dup_tab_vars.items():
+            try:
+                if var.get():
+                    kinds.add(key)
+            except Exception:
+                kinds.add(key)
+        return kinds or set(DUP_KINDS)
+
     def start_dup_scan(self):
-        if self._dup_running:
-            return
+        gen = self.jobs.start("dup")
+        scope = self.dup_scope.get()
         self._dup_running = True
         self._dup_cancel = False
         self.dup_sub.configure(text="正在查找重复文件…")
-        threading.Thread(target=self._dup_worker, daemon=True).start()
+        threading.Thread(target=self._dup_worker, args=(gen, scope), daemon=True).start()
 
-    def _dup_worker(self):
-        scope = self.dup_scope.get()
+    def _dup_worker(self, gen, scope):
         if scope == "用户目录":
             roots = [os.environ.get("USERPROFILE", "C:\\")]
         elif scope == "全部磁盘":
@@ -1360,12 +1371,11 @@ class App(tk.Tk):
         try:
             groups = dupes.find_duplicates(
                 roots, min_size=1 << 20,
-                progress=lambda n: self.queue.put(("dup_progress", n)),
+                progress=lambda n: self.queue.put(("dup_progress", gen, n)),
                 cancel=lambda: self._dup_cancel)
         except Exception:
             groups = []
-        self._dup_running = False
-        self.queue.put(("dup_rows", groups))
+        self.queue.put(("dup_rows", gen, groups))
 
     def _group_kind(self, group):
         files = group.get("files") or []
@@ -1393,13 +1403,15 @@ class App(tk.Tk):
         table = getattr(self, "dup_table", None)
         if not table:
             return
+        kinds = self._dup_kinds()
         shown = []
+        visible_paths = set()
         for group in self.dup_groups:
-            kind = self._group_kind(group)
-            var = self.dup_tab_vars.get(kind)
-            if var is not None and not var.get():
+            if self._group_kind(group) not in kinds:
                 continue
             shown.append(group)
+            visible_paths.update(group.get("files") or [])
+        self.dup_checked &= visible_paths
         if self.dup_sort_key == "mtime":
             shown.sort(key=lambda group: max((group.get("mtimes") or {}).values() or [0]),
                        reverse=self.dup_sort_desc)
@@ -1425,7 +1437,7 @@ class App(tk.Tk):
     def _refresh_dup_head(self):
         if not getattr(self, "dup_head", None):
             return
-        doomed = dupes.paths_to_delete(self.dup_groups, self.dup_checked)
+        doomed = dupes.paths_for_cleanup(self.dup_groups, self.dup_checked, self._dup_kinds())
         sizes = {path: group["size"] for group in self.dup_groups for path in group.get("files") or []}
         selected_size = sum(sizes.get(path, 0) for path in doomed)
         reclaim = sum(group["size"] * max(len(group["files"]) - 1, 0) for group in self.dup_groups)
@@ -1466,7 +1478,8 @@ class App(tk.Tk):
     def _delete_dup(self):
         if self._cleaning or self._dup_running:
             return
-        paths = [path for path in dupes.paths_to_delete(self.dup_groups, self.dup_checked)
+        paths = [path for path in dupes.paths_for_cleanup(
+                    self.dup_groups, self.dup_checked, self._dup_kinds())
                  if not safepath.is_protected_path(path)]
         if not paths:
             messagebox.showinfo("提示", "请先勾选要清理的重复文件。每组都会留下至少一份。")
@@ -1711,30 +1724,31 @@ class App(tk.Tk):
         return photo
 
     def _scan_im(self, key):
-        if self._im_running.get(key):
-            return
+        gen = self.jobs.start("im-" + key)
         self._im_running[key] = True
         sub = self.im_subs.get(key)
         if sub:
             sub.configure(text="正在扫描媒体文件…")
+        roots = self.im_roots[key]()
 
-        def work():
+        def work(generation, scan_roots):
             def progress(path):
-                self.queue.put(("im_progress", key, path))
+                self.queue.put(("im_progress", key, generation, path))
 
             try:
-                records = imclean.list_media(self.im_roots[key](), progress=progress)
+                records = imclean.list_media(scan_roots, progress=progress)
             except Exception:
                 records = []
-            self._im_running[key] = False
-            self.queue.put(("im_scan", key, records))
+            self.queue.put(("im_scan", key, generation, records))
 
-        threading.Thread(target=work, daemon=True).start()
+        threading.Thread(target=work, args=(gen, roots), daemon=True).start()
 
     def _clean_im(self, key):
         if self._cleaning:
             return
         files = self.im_files.get(key) or []
+        current = {item["path"] for item in files}
+        self.im_checked_paths[key] &= current
         chosen = [item for item in files if item["path"] in self.im_checked_paths.get(key, set())]
         if not chosen:
             messagebox.showinfo("提示", "请先勾选要清理的文件。")
@@ -2154,17 +2168,25 @@ class App(tk.Tk):
             messagebox.showinfo("清理完成", f"本次释放 {utils.fmt_size(message[1])}")
             self.start_scan()
         elif kind == "big_progress":
-            self.big_sub.configure(text=f"正在扫描 {message[1]} 的大文件…")
+            if self.jobs.accept("big", message[1]):
+                self.big_sub.configure(text=f"正在扫描 {message[2]} 的大文件…")
         elif kind == "big_rows":
+            if not self.jobs.accept("big", message[1]):
+                return
+            self._big_running = False
             self.worker = None
-            self.big_rows = message[1]
+            self.big_rows = message[2]
             self._render_big()
             self._update_sidebar_sizes()
         elif kind == "dup_progress":
-            self.dup_sub.configure(text=f"正在查找重复文件… 已发现 {message[1]} 组")
+            if self.jobs.accept("dup", message[1]):
+                self.dup_sub.configure(text=f"正在查找重复文件… 已发现 {message[2]} 组")
         elif kind == "dup_rows":
+            if not self.jobs.accept("dup", message[1]):
+                return
+            self._dup_running = False
             self.worker = None
-            self.dup_groups = message[1]
+            self.dup_groups = message[2]
             self.dup_checked = dupes.auto_select(self.dup_groups)
             self._render_dup()
             self._update_sidebar_sizes()
@@ -2191,7 +2213,10 @@ class App(tk.Tk):
             elif self.current_page == "dup":
                 self.start_dup_scan()
         elif kind == "bigmove_rows":
-            self.bigmove_rows = message[1]
+            if not self.jobs.accept("bigmove", message[1]):
+                return
+            self._big_running = False
+            self.bigmove_rows = message[2]
             self._render_bigmove()
         elif kind == "bigmove_done":
             ok, errors = message[1], message[2]
@@ -2239,11 +2264,16 @@ class App(tk.Tk):
             messagebox.showinfo("清理完成",
                                 f"释放 {utils.fmt_size(message[1])}，清除 {message[2]} 条注册表记录")
         elif kind == "im_progress":
-            sub = self.im_subs.get(message[1])
-            if sub:
-                sub.configure(text="正在扫描: " + str(message[2]))
+            key, gen, path = message[1], message[2], message[3]
+            if self.jobs.accept("im-" + key, gen):
+                sub = self.im_subs.get(key)
+                if sub:
+                    sub.configure(text="正在扫描: " + str(path))
         elif kind == "im_scan":
-            _, key, records = message
+            _, key, gen, records = message
+            if not self.jobs.accept("im-" + key, gen):
+                return
+            self._im_running[key] = False
             self.im_files[key] = records or []
             self.im_scan[key] = imclean.aggregate(records or [])
             self.im_checked_paths[key] = {
@@ -2262,9 +2292,10 @@ class App(tk.Tk):
             self.frag_values["space"].configure(text=f"{space} GB" if space is not None else "—")
             self.frag_values["rate"].configure(text=f"{percent:g}%" if percent is not None else "—")
             if percent is None and count is None:
-                self.frag_status.configure(text="状态：没能读到碎片分析，分布图不会用假数据填充")
+                self.frag_status.configure(text="状态：没能读到碎片分析。下方格子是示意，不是磁盘簇的真实布局")
             else:
-                self.frag_status.configure(text=f"状态：{str(drive).rstrip(chr(92))} 分析完成")
+                self.frag_status.configure(
+                    text=f"状态：{str(drive).rstrip(chr(92))} 分析完成。分布图为示意，按碎片率上色")
             if self.frag_canvas is not None:
                 self._draw_frag_grid(self.frag_canvas)
             self._update_sidebar_sizes()

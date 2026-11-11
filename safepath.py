@@ -4,7 +4,10 @@ Windows 盘符路径在 Linux 上不能交给 os.path.abspath（会被拼到当�
 这里对「盘符:」开头的路径按 Windows 规则规范化，其余路径仍走本机绝对路径。
 """
 import os
+import stat
 import sys
+
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 
 
 PASSWORD_FILENAMES = {
@@ -110,6 +113,31 @@ def is_drive_root(path: str) -> bool:
 def is_password_store(path: str) -> bool:
     """浏览器保存的密码库。隐私清理默认不能删这些文件。"""
     return basename(path).lower() in PASSWORD_FILENAMES
+
+
+def is_reparse_point(path: str) -> bool:
+    """符号链接、联接或其他重解析点。读不到属性时不当成链接。"""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    attributes = getattr(info, "st_file_attributes", 0) or 0
+    if attributes & FILE_ATTRIBUTE_REPARSE_POINT:
+        return True
+    return stat.S_ISLNK(info.st_mode)
+
+
+def clean_forbidden(path: str, environ=None) -> bool:
+    """清理执行时再拦一次：文档库、密码库、链接、盘符根和关键系统文件。"""
+    if not path:
+        return True
+    if is_reparse_point(path):
+        return True
+    if is_password_store(path) or is_user_library(path, environ):
+        return True
+    if is_drive_root(path) or is_critical_file(path):
+        return True
+    return False
 
 
 def is_critical_file(path: str) -> bool:

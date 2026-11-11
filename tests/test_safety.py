@@ -9,6 +9,8 @@ from unittest import mock
 import datdecode
 import cleaner
 import dupes
+import scanjobs
+import scanner
 import fragviz
 import history
 import imclean
@@ -201,6 +203,8 @@ class ImcleanTests(unittest.TestCase):
 class RuleValidationTests(unittest.TestCase):
     def test_url_and_command_rules(self):
         self.assertEqual(ruleupdate.validate_url("https://example.com/rules.json"), "")
+        self.assertIn("https", ruleupdate.validate_url("http://example.com/rules.json"))
+        self.assertNotEqual(ruleupdate.validate_url("http://example.com/rules.json"), "")
         self.assertTrue(ruleupdate.validate_url("file:///tmp/rules.json"))
         self.assertTrue(ruleupdate.validate_url("javascript:alert(1)"))
         command = {"key": "evil", "kind": "command", "command": ["cmd.exe", "/c", "calc"]}
@@ -213,6 +217,11 @@ class RuleValidationTests(unittest.TestCase):
         ok = {"key": "app_demo", "kind": "files", "tier": "standard",
               "paths": [r"%TEMP%\Demo\Cache"]}
         self.assertEqual(ruleupdate.validate_remote_rule(ok), "")
+        documents = {"key": "docs", "kind": "files",
+                     "paths": [r"%USERPROFILE%\Documents"]}
+        self.assertIn("文档", ruleupdate.validate_remote_rule(documents))
+        loose = {"key": "video", "kind": "files", "paths": [r"D:\Videos\holiday.mp4"]}
+        self.assertIn("临时", ruleupdate.validate_remote_rule(loose))
 
     def test_merge_keeps_local_command_and_drops_remote_command(self):
         local = {"version": 1, "categories": [
@@ -544,6 +553,152 @@ class DatDecodeTests(unittest.TestCase):
     def test_plain_text_is_not_decoded(self):
         self.assertIsNone(datdecode.xor_key(b"hello world!!"))
         self.assertIsNone(datdecode.decode_dat(b"\x00\x01\x02\x03\x04"))
+
+
+class ReviewFixTests(unittest.TestCase):
+    def test_rollback_keeps_the_only_copy_when_copy_back_fails(self):
+        src = tempfile.mkdtemp()
+        dest = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(dest, "only.txt"), "w", encoding="utf-8") as handle:
+                handle.write("only-copy")
+
+            def robocopy(_source, _dest, move):
+                self.assertFalse(move)
+                return 1
+
+            with mock.patch.object(migrate, "_robocopy", side_effect=robocopy):
+                with self.assertRaises(migrate.MigrateError):
+                    migrate._rollback_to_source(src, dest)
+            with open(os.path.join(dest, "only.txt"), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "only-copy")
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest, ignore_errors=True)
+
+    def test_incomplete_copy_does_not_delete_source(self):
+        src = tempfile.mkdtemp()
+        dest_root = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(src, "keep.txt"), "w", encoding="utf-8") as handle:
+                handle.write("stay")
+
+            def drive(path):
+                full = os.path.abspath(path)
+                root = os.path.abspath(dest_root)
+                if full == root or full.startswith(root + os.sep):
+                    return "D:"
+                return "C:"
+
+            def robocopy(_source, dest, move):
+                os.makedirs(dest, exist_ok=True)
+                return 1
+
+            with mock.patch.object(migrate, "_drive_of", side_effect=drive), \
+                    mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
+                    mock.patch.object(migrate, "is_junction", return_value=False):
+                with self.assertRaises(migrate.MigrateError):
+                    migrate.migrate(src, dest_root)
+            with open(os.path.join(src, "keep.txt"), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "stay")
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            shutil.rmtree(dest_root, ignore_errors=True)
+
+    def test_cleaner_refuses_documents_at_execution(self):
+        root = tempfile.mkdtemp()
+        old = os.environ.get("USERPROFILE")
+        os.environ["USERPROFILE"] = root
+        try:
+            docs = os.path.join(root, "Documents")
+            os.makedirs(docs)
+            secret = os.path.join(docs, "secret.txt")
+            with open(secret, "w", encoding="utf-8") as handle:
+                handle.write("keep-me")
+            cat = type("C", (), {"key": "t", "name": "t"})()
+            result = cleaner.CleanResult(cat)
+            cleaner._delete_file(secret, [docs], ("*",), result)
+            self.assertTrue(os.path.exists(secret))
+            self.assertEqual(result.skipped, 1)
+            with open(secret, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "keep-me")
+        finally:
+            if old is None:
+                os.environ.pop("USERPROFILE", None)
+            else:
+                os.environ["USERPROFILE"] = old
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_shred_symlink_does_not_follow(self):
+        folder = tempfile.mkdtemp()
+        try:
+            target = os.path.join(folder, "secret.txt")
+            with open(target, "w", encoding="utf-8") as handle:
+                handle.write("safe")
+            link = os.path.join(folder, "link.txt")
+            os.symlink(target, link)
+            with self.assertRaises(shredder.ShredError):
+                shredder.shred_path(link)
+            with open(target, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "safe")
+            nested = os.path.join(folder, "real")
+            os.makedirs(nested)
+            inside = os.path.join(nested, "data.txt")
+            with open(inside, "w", encoding="utf-8") as handle:
+                handle.write("dir")
+            linkdir = os.path.join(folder, "linkdir")
+            os.symlink(nested, linkdir, target_is_directory=True)
+            with self.assertRaises(shredder.ShredError):
+                shredder.shred_path(linkdir)
+            with open(inside, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "dir")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_shred_rejects_mocked_junction_root(self):
+        folder = tempfile.mkdtemp()
+        try:
+            target = os.path.join(folder, "data.txt")
+            with open(target, "w", encoding="utf-8") as handle:
+                handle.write("junction")
+            with mock.patch.object(safepath, "is_reparse_point", return_value=True):
+                with self.assertRaises(shredder.ShredError):
+                    shredder.shred_path(target)
+            with open(target, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "junction")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_hidden_duplicate_selection_is_not_deleted(self):
+        groups = [
+            {"hash": "v", "size": 10, "files": [r"C:\a.mp4", r"C:\b.mp4"],
+             "mtimes": {r"C:\a.mp4": 2, r"C:\b.mp4": 1}},
+            {"hash": "z", "size": 8, "files": [r"D:\a.zip", r"D:\b.zip"],
+             "mtimes": {r"D:\a.zip": 2, r"D:\b.zip": 1}},
+        ]
+        selected = dupes.auto_select(groups)
+        self.assertIn(r"D:\b.zip", selected)
+        visible = dupes.paths_for_cleanup(groups, selected, {"video"})
+        self.assertNotIn(r"D:\b.zip", visible)
+        self.assertNotIn(r"D:\a.zip", visible)
+        self.assertTrue(all(path.endswith(".mp4") for path in visible))
+
+    def test_stale_scan_generation_is_dropped(self):
+        jobs = scanjobs.ScanJobs()
+        first = jobs.start("big")
+        second = jobs.start("big")
+        self.assertFalse(jobs.accept("big", first))
+        self.assertTrue(jobs.accept("big", second))
+        self.assertTrue(jobs.accept("dup", jobs.start("dup")))
+        self.assertFalse(jobs.accept("im-wechat", 1))
+
+    def test_large_list_is_not_truncated_and_disk_filter_hides_rows(self):
+        rows = [(rf"C:\f{i}.mp4", i, 0) for i in range(10)] + [(r"D:\a.zip", 3, 0)]
+        self.assertEqual(len(scanner.visible_large_paths(rows, "all", "全部")), 11)
+        only_c = scanner.visible_large_paths(rows, "video", "C:")
+        self.assertEqual(len(only_c), 10)
+        self.assertTrue(all(path.startswith("C:") for path in only_c))
+        self.assertEqual(scanner.visible_large_paths(rows, "archive", "全部"), [r"D:\a.zip"])
 
 
 class FragVizTests(unittest.TestCase):

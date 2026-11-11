@@ -71,6 +71,9 @@ def _clean_files(cat, result, log):
 def _delete_file(path, allowed, patterns, result):
     if is_runtime_path(path):
         return
+    if safepath.clean_forbidden(path):
+        result.skipped += 1
+        return
     if safepath.is_password_store(path):
         result.skipped += 1
         return

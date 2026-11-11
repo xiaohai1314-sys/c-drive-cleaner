@@ -59,6 +59,22 @@ def auto_select(groups) -> set:
     return chosen
 
 
+def paths_for_cleanup(groups, selected, kinds=None) -> list:
+    """只删除当前类型筛选里看得见、并且勾选了的副本。隐藏分组不参与删除。"""
+    visible = []
+    allowed = set(kinds) if kinds is not None else None
+    for group in groups or []:
+        files = list(group.get("files") or [])
+        if not files:
+            continue
+        if allowed is not None:
+            import filetypes
+            if filetypes.kind_of(files[0]) not in allowed:
+                continue
+        visible.append(group)
+    return paths_to_delete(visible, selected)
+
+
 def paths_to_delete(groups, selected) -> list:
     """真正可删的路径。每组至少留一份，即使用户把整组都勾上。"""
     selected = set(selected or [])

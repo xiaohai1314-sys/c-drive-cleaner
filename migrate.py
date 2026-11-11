@@ -8,6 +8,7 @@
 任何一步失败都不会丢数据：目标副本在建立联接前一直保留。
 """
 import ctypes
+import hashlib
 import os
 import shutil
 import subprocess
@@ -195,13 +196,64 @@ def junction_works(link: str, target: str) -> bool:
     return os.path.exists(os.path.join(link, name))
 
 
-def _rollback_to_source(src: str, dest: str):
-    """把数据从目标搬回源位置并清理目标。"""
+def _fingerprint(path: str):
+    """文件的 (大小, 摘要)。链接返回 None，避免把链接目标当成副本。"""
     try:
-        os.rmdir(src)
+        info = os.lstat(path)
     except OSError:
-        pass
-    _robocopy(dest, src, move=True)
+        return None
+    if safepath.is_reparse_point(path):
+        return None
+    size = info.st_size
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            if size <= 8 * 1024 * 1024:
+                digest.update(handle.read())
+            else:
+                digest.update(handle.read(65536))
+                handle.seek(max(0, size - 65536))
+                digest.update(handle.read(65536))
+                digest.update(str(size).encode("ascii"))
+    except OSError:
+        return None
+    return (size, digest.hexdigest())
+
+
+def file_inventory(root: str) -> dict:
+    """root 下普通文件的相对路径指纹。不进入链接。"""
+    found = {}
+    if not root or not os.path.isdir(root) or safepath.is_reparse_point(root):
+        return found
+    base = os.path.abspath(root)
+    for entry in utils.walk_files(base):
+        mark = _fingerprint(entry.path)
+        if mark is None:
+            continue
+        found[os.path.relpath(entry.path, base)] = mark
+    return found
+
+
+def inventory_covers(have: dict, need: dict) -> bool:
+    """have 是否包含 need 里的每一份，且大小和摘要都相同。"""
+    for rel, mark in (need or {}).items():
+        if not mark or have.get(rel) != mark:
+            return False
+    return True
+
+
+def _rollback_to_source(src: str, dest: str):
+    """把目标副本拷回源位置。校验通过后才删除目标，避免删掉唯一的一份。"""
+    if safepath.is_reparse_point(src):
+        try:
+            os.rmdir(src)
+        except OSError as exc:
+            raise MigrateError(f"无法移除联接，目标副本已保留：{exc}")
+    os.makedirs(src, exist_ok=True)
+    needed = file_inventory(dest)
+    _robocopy(dest, src, move=False)
+    if not inventory_covers(file_inventory(src), needed):
+        raise MigrateError("还原校验失败，目标位置的副本已保留，没有删除唯一的一份")
     if os.path.isdir(dest):
         remove_tree(dest)
 
@@ -212,21 +264,23 @@ def migrate(src: str, dest_root: str, log=lambda _message: None):
 
     log(f"复制 {src}")
     log(f"  → {dest}")
-    rc = _robocopy(src, dest, move=True)
-    if rc >= 8:
-        if os.path.isdir(dest):
+    original = file_inventory(src)
+    rc = _robocopy(src, dest, move=False)
+    if rc >= 8 or not inventory_covers(file_inventory(dest), original):
+        if inventory_covers(file_inventory(src), original) and os.path.isdir(dest):
             remove_tree(dest)
-        raise MigrateError(f"复制失败（robocopy 返回 {rc}），未改动源目录")
+        raise MigrateError(f"复制校验失败（robocopy 返回 {rc}），源目录保持原样")
 
-    remaining = count_files(src)
-    if remaining:
-        log(f"源目录仍有 {remaining} 个文件被占用，正在还原…")
-        _robocopy(dest, src, move=False)
-        if os.path.isdir(dest):
-            remove_tree(dest)
-        raise MigrateError(
-            f"{remaining} 个文件被占用无法移动，已全部还原。"
-            "请先完全关闭相关程序（含托盘图标）后重试")
+    for rel in original:
+        path = os.path.join(src, rel)
+        if safepath.is_reparse_point(path):
+            continue
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    if file_inventory(src):
+        raise MigrateError("源目录仍有文件未能移走，目标副本已保留，没有删除唯一的一份")
 
     _remove_junction_dirs(src)
     try:
@@ -261,11 +315,11 @@ def undo(src: str, log=lambda _message: None):
 
     log(f"搬回 {target}")
     log(f"  → {src}")
-    rc = _robocopy(target, src, move=True)
-    remaining = count_files(target)
-    if rc >= 8 or remaining:
+    needed = file_inventory(target)
+    rc = _robocopy(target, src, move=False)
+    if rc >= 8 or not inventory_covers(file_inventory(src), needed):
         raise MigrateError(
-            "数据已搬回大部分，但仍有文件被占用未能搬回，"
+            "搬回校验失败，目标副本已保留，没有删除唯一的一份。"
             f"请检查原位置 {src} 和目标 {target}")
 
     remove_tree(target)
