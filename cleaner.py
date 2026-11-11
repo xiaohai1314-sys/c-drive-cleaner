@@ -5,6 +5,7 @@ import stat
 import subprocess
 import time
 
+import safepath
 import scanner
 from utils import (fmt_size, is_runtime_path, is_within, norm_path,
                    remove_empty_dirs, schedule_delete, walk_files)
@@ -47,15 +48,19 @@ def clean_category(cat, log=lambda message: None):
 
 def _clean_files(cat, result, log):
     allowed = [norm_path(path) for path in cat.paths]
+    untrusted = bool(getattr(cat, "untrusted", False))
 
     for root in cat.paths:
-        if not os.path.exists(root):
+        if safepath.is_reparse_point(root) or os.path.islink(root):
+            result.skipped += 1
+            continue
+        if not os.path.lexists(root):
             continue
         if os.path.isfile(root):
-            _delete_file(root, allowed, cat.patterns, result)
+            _delete_file(root, allowed, cat.patterns, result, untrusted)
             continue
         for entry in walk_files(root):
-            _delete_file(entry.path, allowed, cat.patterns, result)
+            _delete_file(entry.path, allowed, cat.patterns, result, untrusted)
         if cat.prune_dirs:
             removed = remove_empty_dirs(root)
             if removed:
@@ -67,14 +72,32 @@ def _clean_files(cat, result, log):
     return result
 
 
-def _delete_file(path, allowed, patterns, result):
+def _delete_file(path, allowed, patterns, result, untrusted=False):
     if is_runtime_path(path):
+        return
+    if safepath.execution_forbidden(path, untrusted=untrusted):
+        result.skipped += 1
+        return
+    if safepath.is_password_store(path):
+        result.skipped += 1
         return
     if not scanner.match_name(os.path.basename(path), patterns):
         return
     if not is_within(path, allowed):
         result.skipped += 1
         return
+    # 删除前再看一次，避免遍历之后目录被换成链接。
+    if safepath.is_reparse_point(path) or os.path.islink(path):
+        result.skipped += 1
+        return
+    parent = os.path.dirname(path)
+    while parent and parent not in (os.path.dirname(parent),):
+        if safepath.is_reparse_point(parent) or os.path.islink(parent):
+            result.skipped += 1
+            return
+        if any(is_within(parent, [root]) or norm_path(parent) == norm_path(root) for root in allowed):
+            break
+        parent = os.path.dirname(parent)
 
     try:
         size = os.path.getsize(path)
@@ -82,11 +105,23 @@ def _delete_file(path, allowed, patterns, result):
         size = 0
 
     try:
-        os.remove(path)
+        if safepath.execution_forbidden(path, untrusted=untrusted):
+            result.skipped += 1
+            return
+        safepath.unlink_regular(path, allowed)
+    except safepath.UnsafeUnlinkError as exc:
+        # Never schedule a path whose directory entry changed during deletion.
+        result.skipped += 1
+        result.errors.append(str(exc))
+        return
     except PermissionError:
         try:
             os.chmod(path, stat.S_IWRITE)
-            os.remove(path)
+            safepath.unlink_regular(path, allowed)
+        except safepath.UnsafeUnlinkError as exc:
+            result.skipped += 1
+            result.errors.append(str(exc))
+            return
         except OSError:
             _mark_pending(path, size, result)
             return

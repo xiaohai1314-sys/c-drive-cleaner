@@ -115,6 +115,25 @@ def scan_top_dirs(root: str = "C:\\", limit: int = 40, progress=None):
     return rows[:limit]
 
 
+def visible_large_paths(rows, kind="all", disk="全部"):
+    """按类型页签和磁盘筛选得到当前看得见的路径。安装包归入「其他」。"""
+    import filetypes
+    visible = []
+    for row in rows or []:
+        path = row[0]
+        file_kind = filetypes.kind_of(path)
+        if file_kind == "installer":
+            file_kind = "other"
+        if kind and kind != "all" and file_kind != kind:
+            continue
+        text = str(path)
+        drive = text[:2] if len(text) >= 2 and text[1] == ":" else ""
+        if disk and disk != "全部" and drive.upper() != str(disk).upper():
+            continue
+        visible.append(path)
+    return visible
+
+
 def scan_large_files(root: str = "C:\\", min_size: int = 100 * 1024 * 1024,
                      limit: int = 100, progress=None):
     """查找大于 min_size 的文件，跳过系统目录，按大小降序。"""
@@ -123,4 +142,6 @@ def scan_large_files(root: str = "C:\\", min_size: int = 100 * 1024 * 1024,
     if progress:
         progress(len(files), len(files), root)
     files.sort(key=lambda item: item[1], reverse=True)
+    if limit is None:
+        return files
     return files[:limit]

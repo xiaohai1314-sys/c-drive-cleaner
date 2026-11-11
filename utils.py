@@ -46,6 +46,21 @@ def fmt_size(num) -> str:
     return f"{num} B"
 
 
+def fmt_size_compact(num) -> str:
+    """侧栏用的短格式，例如 23.2G。"""
+    num = int(num or 0)
+    if num < 1024:
+        return f"{num}B"
+    value = float(num)
+    for unit in ("K", "M", "G", "T"):
+        value /= 1024.0
+        if value < 1024 or unit == "T":
+            if value >= 100 or abs(value - round(value)) < 0.05:
+                return f"{int(round(value))}{unit}"
+            return f"{value:.1f}{unit}"
+    return f"{num}B"
+
+
 def norm_path(path: str) -> str:
     return os.path.normcase(os.path.abspath(path)).rstrip("\\")
 
@@ -54,8 +69,8 @@ def is_within(path: str, roots) -> bool:
     """path 是否位于 roots 中某个目录之下（含等于）。"""
     p = norm_path(path)
     for root in roots:
-        r = norm_path(root)
-        if p == r or p.startswith(r + "\\"):
+        r = norm_path(root).rstrip("/")
+        if p == r or p.startswith(r + "\\") or p.startswith(r + "/"):
             return True
     return False
 
@@ -63,10 +78,23 @@ def is_within(path: str, roots) -> bool:
 def is_link_like(entry) -> bool:
     """junction / 符号链接 / 无法读取属性的条目，一律视为不可进入。"""
     try:
-        st = entry.stat(follow_symlinks=False)
-        return bool(st.st_file_attributes & FILE_ATTRIBUTE_REPARSE_POINT)
+        if entry.is_symlink():
+            return True
     except OSError:
         return True
+    is_junction = getattr(entry, "is_junction", None)
+    if callable(is_junction):
+        try:
+            if is_junction():
+                return True
+        except OSError:
+            return True
+    try:
+        st = entry.stat(follow_symlinks=False)
+    except OSError:
+        return True
+    attributes = getattr(st, "st_file_attributes", 0) or 0
+    return bool(attributes & FILE_ATTRIBUTE_REPARSE_POINT)
 
 
 def is_runtime_path(path: str) -> bool:
@@ -125,17 +153,34 @@ def schedule_delete(path: str) -> bool:
 
 
 def walk_files(root):
-    """遍历 root 下所有文件，跳过链接类目录，遇到错误静默继续。"""
+    """遍历 root 下所有文件。根或中间目录是链接时直接停，不跟随。"""
+    if not root or os.path.islink(root):
+        return
+    try:
+        import safepath
+        if safepath.is_reparse_point(root):
+            return
+    except Exception:
+        return
     stack = [root]
     while stack:
         current = stack.pop()
+        if os.path.islink(current):
+            continue
+        try:
+            import safepath
+            if safepath.is_reparse_point(current):
+                continue
+        except Exception:
+            continue
         try:
             with os.scandir(current) as it:
                 for entry in it:
                     try:
+                        if is_link_like(entry):
+                            continue
                         if entry.is_dir(follow_symlinks=False):
-                            if not is_link_like(entry):
-                                stack.append(entry.path)
+                            stack.append(entry.path)
                         elif entry.is_file(follow_symlinks=False):
                             yield entry
                     except OSError:
