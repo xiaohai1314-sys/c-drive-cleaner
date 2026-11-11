@@ -118,13 +118,14 @@ class RuleV2Tests(unittest.TestCase):
             doc = {"categories": [{
                 "key": "x1", "name": "X", "paths": [target],
                 "exclude": ["*.pdf"], "min_age_minutes": 30,
-                "process_absent": ["App.exe"],
+                "process_absent": ["App.exe"], "irreversible_log": True,
             }]}
             cats = self._load(doc)
         self.assertEqual(len(cats), 1)
         self.assertEqual(cats[0].exclude, ("*.pdf",))
         self.assertEqual(cats[0].min_age_minutes, 30)
         self.assertEqual(cats[0].process_absent, ("App.exe",))
+        self.assertTrue(cats[0].irreversible_log)
 
     def test_detect_gates_rule(self):
         with tempfile.TemporaryDirectory() as tmp:

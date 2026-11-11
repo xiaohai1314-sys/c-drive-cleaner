@@ -525,7 +525,7 @@ class App(_TkRoot):
             tk.Label(holder, image=art, bg=PAGE).pack()
             look.Tick(holder, var, command=lambda c=cat, v=var: on_toggle(c, v.get()),
                       bg=PAGE, size=16).place_over(holder)
-            name = tk.Label(card, text=cat.name, bg=PAGE, fg=TEXT,
+            name = tk.Label(card, text=self._display_category_name(cat), bg=PAGE, fg=TEXT,
                             font=look.tk_font(9), wraplength=92, justify="center")
             name.pack(pady=(4, 0))
             Pill(card, self._size_text(cat.key), ORANGE).pack(pady=(2, 6))
@@ -859,7 +859,7 @@ class App(_TkRoot):
         folded = getattr(self, "_clean_folded", set())
         self._clean_folded = folded
         for key, title, note, cats in (("rec", "推荐清理项", "系统和软件的垃圾和无用文件，可放心清理", recommended),
-                                       ("confirm", "谨慎清理项", "系统和软件的数据缓存，可按需选择", confirm)):
+                                       ("confirm", "谨慎清理项", "含需确认的数据及不可恢复日志，勾选前请查看提示", confirm)):
             if not cats:
                 continue
             label = self._section_title(self.clean_body, title, note, extra=self._section_sizes(cats),
@@ -875,6 +875,11 @@ class App(_TkRoot):
         else:
             self._clean_folded.add(key)
         self.after(1, self._refresh_clean_cards)
+
+    def _display_category_name(self, cat):
+        if getattr(cat, "irreversible_log", False):
+            return f"{cat.name}（日志不可恢复）"
+        return cat.name
 
     def _cat_tip(self, cat):
         """清理卡片的悬停说明：做什么、动哪些位置，让人知道删的是什么。"""
@@ -2383,14 +2388,14 @@ class App(_TkRoot):
             return
         lines = [f"即将清理 {len(chosen)} 项：", ""]
         for cat in chosen:
-            lines.append(f"· {cat.name}  {self._size_text(cat.key)}")
+            lines.append(f"· {self._display_category_name(cat)}  {self._size_text(cat.key)}")
         deep = [c for c in chosen if c.requires_confirm]
         if deep:
             lines.append("")
             lines.append("以下操作请确认：")
             for cat in deep:
                 suffix = "（移到回收站，可恢复）" if getattr(cat, "recycle", False) else ""
-                lines.append(f"· {cat.name}：{cat.warning or cat.note or cat.describe}{suffix}")
+                lines.append(f"· {self._display_category_name(cat)}：{cat.warning or cat.note or cat.describe}{suffix}")
         lines.extend(["", "确定继续？"])
         if self._cleaning:
             return

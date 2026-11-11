@@ -2166,9 +2166,7 @@
    "desc": "TIM 的网页缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Tencent\\TIM\\Cache",
-    "%LOCALAPPDATA%\\Tencent\\TIM\\Logs",
-    "%LOCALAPPDATA%\\Tencent\\TIM\\logs"
+    "%LOCALAPPDATA%\\Tencent\\TIM\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -2228,7 +2226,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_tencentdocs",
@@ -2272,8 +2273,7 @@
    "desc": "WeGame 的网页缓存与日志",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\WeGame\\Cache",
-    "%LOCALAPPDATA%\\WeGame\\Logs"
+    "%LOCALAPPDATA%\\WeGame\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -2334,7 +2334,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_qqpinyin",
@@ -2342,9 +2345,7 @@
    "desc": "QQ输入法的缓存与日志",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Tencent\\QQPinyin\\Cache",
-    "%LOCALAPPDATA%\\Tencent\\QQPinyin\\Logs",
-    "%LOCALAPPDATA%\\Tencent\\QQPinyin\\logs"
+    "%LOCALAPPDATA%\\Tencent\\QQPinyin\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -2378,9 +2379,7 @@
    "desc": "DeskGo 的缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Tencent\\DeskGo\\Cache",
-    "%LOCALAPPDATA%\\Tencent\\DeskGo\\Logs",
-    "%LOCALAPPDATA%\\Tencent\\DeskGo\\logs"
+    "%LOCALAPPDATA%\\Tencent\\DeskGo\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -2450,8 +2449,7 @@
    "desc": "优酷客户端的缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Youku\\Cache",
-    "%LOCALAPPDATA%\\Youku\\Logs"
+    "%LOCALAPPDATA%\\Youku\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -2520,8 +2518,7 @@
    "desc": "百度网盘客户端的缓存与日志",
    "tier": "standard",
    "glob_dirs": [
-    "%APPDATA%\\baidu\\BaiduNetdisk\\Cache",
-    "%APPDATA%\\baidu\\BaiduNetdisk\\logs"
+    "%APPDATA%\\baidu\\BaiduNetdisk\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -2555,9 +2552,7 @@
    "desc": "百度Hi的网页缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%APPDATA%\\Baidu\\BaiduHi\\Cache",
-    "%APPDATA%\\Baidu\\BaiduHi\\Logs",
-    "%APPDATA%\\Baidu\\BaiduHi\\logs"
+    "%APPDATA%\\Baidu\\BaiduHi\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -2659,8 +2654,7 @@
    "desc": "UU 加速器的缓存与日志",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Netease\\UU\\Cache",
-    "%LOCALAPPDATA%\\Netease\\UU\\Logs"
+    "%LOCALAPPDATA%\\Netease\\UU\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -2720,7 +2714,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_lark",
@@ -2730,8 +2727,7 @@
    "glob_dirs": [
     "%APPDATA%\\Lark\\Cache",
     "%APPDATA%\\Lark\\Code Cache",
-    "%APPDATA%\\Lark\\GPUCache",
-    "%APPDATA%\\Lark\\logs"
+    "%APPDATA%\\Lark\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -2834,7 +2830,6 @@
    "desc": "360 安全卫士的日志与缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%APPDATA%\\360safe\\Logs",
     "%LOCALAPPDATA%\\360Safe\\Cache"
    ],
    "prune_dirs": true,
@@ -2929,7 +2924,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_sunlogin",
@@ -2964,7 +2962,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_raylink",
@@ -3043,9 +3044,7 @@
    "desc": "搜狗五笔的缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%APPDATA%\\Sogou\\Wubi\\Cache",
-    "%APPDATA%\\Sogou\\Wubi\\Logs",
-    "%APPDATA%\\Sogou\\Wubi\\logs"
+    "%APPDATA%\\Sogou\\Wubi\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -3079,8 +3078,7 @@
    "desc": "芒果TV客户端的缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\MGTV\\Cache",
-    "%LOCALAPPDATA%\\MGTV\\Logs"
+    "%LOCALAPPDATA%\\MGTV\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -3454,9 +3452,7 @@
    "desc": "腾讯体育客户端的缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Tencent\\Sports\\Cache",
-    "%LOCALAPPDATA%\\Tencent\\Sports\\Logs",
-    "%LOCALAPPDATA%\\Tencent\\Sports\\logs"
+    "%LOCALAPPDATA%\\Tencent\\Sports\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -3593,8 +3589,7 @@
    "desc": "YY 的缓存与日志",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\YY\\Cache",
-    "%LOCALAPPDATA%\\YY\\Logs"
+    "%LOCALAPPDATA%\\YY\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -3690,7 +3685,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_zuoyebang",
@@ -3934,7 +3932,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_eudic",
@@ -4038,7 +4039,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_bluestacks",
@@ -4073,7 +4077,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_i4tools",
@@ -4175,7 +4182,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_hisuite",
@@ -4209,7 +4219,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_ludashi",
@@ -4217,8 +4230,7 @@
    "desc": "鲁大师的缓存与日志",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\LuDaShi\\Cache",
-    "%LOCALAPPDATA%\\LuDaShi\\Logs"
+    "%LOCALAPPDATA%\\LuDaShi\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -4278,7 +4290,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_haozip",
@@ -5000,8 +5015,7 @@
    "desc": "HoYoPlay 启动器的网页缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\miHoYo\\HYP\\Cache",
-    "%LOCALAPPDATA%\\miHoYo\\HYP\\Logs"
+    "%LOCALAPPDATA%\\miHoYo\\HYP\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -5035,9 +5049,7 @@
    "desc": "网易游戏客户端的缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Netease\\Game\\Cache",
-    "%LOCALAPPDATA%\\Netease\\Game\\Logs",
-    "%LOCALAPPDATA%\\Netease\\Game\\logs"
+    "%LOCALAPPDATA%\\Netease\\Game\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -5241,8 +5253,7 @@
    "desc": "迅游的缓存与日志",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\XunYou\\Cache",
-    "%LOCALAPPDATA%\\XunYou\\Logs"
+    "%LOCALAPPDATA%\\XunYou\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -5404,7 +5415,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_taptap",
@@ -5506,7 +5520,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_kuaijianji",
@@ -5788,9 +5805,7 @@
    "desc": "腾讯乐享的缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Tencent\\Lexiang\\Cache",
-    "%LOCALAPPDATA%\\Tencent\\Lexiang\\Logs",
-    "%LOCALAPPDATA%\\Tencent\\Lexiang\\logs"
+    "%LOCALAPPDATA%\\Tencent\\Lexiang\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -6174,42 +6189,6 @@
    ]
   },
   {
-   "key": "app_iron",
-   "name": "SRWare Iron 缓存",
-   "desc": "Iron 浏览器的网页缓存",
-   "tier": "standard",
-   "glob_dirs": [
-    "%LOCALAPPDATA%\\Chromium\\User Data\\*\\Cache",
-    "%LOCALAPPDATA%\\Chromium\\User Data\\*\\Code Cache",
-    "%LOCALAPPDATA%\\Chromium\\User Data\\*\\GPUCache"
-   ],
-   "prune_dirs": true,
-   "min_age_minutes": 60,
-   "exclude": [
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pdf",
-    ".txt",
-    ".md",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".mp3",
-    ".mp4",
-    ".wav",
-    ".zip",
-    ".rar",
-    ".7z"
-   ]
-  },
-  {
    "key": "app_viber",
    "name": "Viber 缓存",
    "desc": "Viber 的网页缓存",
@@ -6253,8 +6232,7 @@
    "glob_dirs": [
     "%APPDATA%\\Session\\Cache",
     "%APPDATA%\\Session\\Code Cache",
-    "%APPDATA%\\Session\\GPUCache",
-    "%APPDATA%\\Session\\logs"
+    "%APPDATA%\\Session\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -6290,8 +6268,7 @@
    "glob_dirs": [
     "%APPDATA%\\Wire\\Cache",
     "%APPDATA%\\Wire\\Code Cache",
-    "%APPDATA%\\Wire\\GPUCache",
-    "%APPDATA%\\Wire\\logs"
+    "%APPDATA%\\Wire\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -6327,8 +6304,7 @@
    "glob_dirs": [
     "%APPDATA%\\Franz\\Cache",
     "%APPDATA%\\Franz\\Code Cache",
-    "%APPDATA%\\Franz\\GPUCache",
-    "%APPDATA%\\Franz\\logs"
+    "%APPDATA%\\Franz\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -6364,8 +6340,7 @@
    "glob_dirs": [
     "%APPDATA%\\Rambox\\Cache",
     "%APPDATA%\\Rambox\\Code Cache",
-    "%APPDATA%\\Rambox\\GPUCache",
-    "%APPDATA%\\Rambox\\logs"
+    "%APPDATA%\\Rambox\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -6401,8 +6376,7 @@
    "glob_dirs": [
     "%APPDATA%\\Ferdium\\Cache",
     "%APPDATA%\\Ferdium\\Code Cache",
-    "%APPDATA%\\Ferdium\\GPUCache",
-    "%APPDATA%\\Ferdium\\logs"
+    "%APPDATA%\\Ferdium\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -6438,8 +6412,7 @@
    "glob_dirs": [
     "%APPDATA%\\Beeper\\Cache",
     "%APPDATA%\\Beeper\\Code Cache",
-    "%APPDATA%\\Beeper\\GPUCache",
-    "%APPDATA%\\Beeper\\logs"
+    "%APPDATA%\\Beeper\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -6475,8 +6448,7 @@
    "glob_dirs": [
     "%APPDATA%\\Guilded\\Cache",
     "%APPDATA%\\Guilded\\Code Cache",
-    "%APPDATA%\\Guilded\\GPUCache",
-    "%APPDATA%\\Guilded\\logs"
+    "%APPDATA%\\Guilded\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -6512,8 +6484,7 @@
    "glob_dirs": [
     "%APPDATA%\\Zulip\\Cache",
     "%APPDATA%\\Zulip\\Code Cache",
-    "%APPDATA%\\Zulip\\GPUCache",
-    "%APPDATA%\\Zulip\\logs"
+    "%APPDATA%\\Zulip\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -6608,7 +6579,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_mumble",
@@ -6642,7 +6616,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_ringcentral",
@@ -6652,8 +6629,7 @@
    "glob_dirs": [
     "%APPDATA%\\RingCentral\\Cache",
     "%APPDATA%\\RingCentral\\Code Cache",
-    "%APPDATA%\\RingCentral\\GPUCache",
-    "%APPDATA%\\RingCentral\\logs"
+    "%APPDATA%\\RingCentral\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -6781,7 +6757,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_miranda",
@@ -6825,8 +6804,7 @@
    "glob_dirs": [
     "%APPDATA%\\Mailspring\\Cache",
     "%APPDATA%\\Mailspring\\Code Cache",
-    "%APPDATA%\\Mailspring\\GPUCache",
-    "%APPDATA%\\Mailspring\\logs"
+    "%APPDATA%\\Mailspring\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -6989,7 +6967,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_evernote",
@@ -7035,8 +7016,7 @@
    "glob_dirs": [
     "%APPDATA%\\Joplin\\Cache",
     "%APPDATA%\\Joplin\\Code Cache",
-    "%APPDATA%\\Joplin\\GPUCache",
-    "%APPDATA%\\Joplin\\logs"
+    "%APPDATA%\\Joplin\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -7072,8 +7052,7 @@
    "glob_dirs": [
     "%APPDATA%\\Anytype\\Cache",
     "%APPDATA%\\Anytype\\Code Cache",
-    "%APPDATA%\\Anytype\\GPUCache",
-    "%APPDATA%\\Anytype\\logs"
+    "%APPDATA%\\Anytype\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -7143,8 +7122,7 @@
    "glob_dirs": [
     "%APPDATA%\\Todoist\\Cache",
     "%APPDATA%\\Todoist\\Code Cache",
-    "%APPDATA%\\Todoist\\GPUCache",
-    "%APPDATA%\\Todoist\\logs"
+    "%APPDATA%\\Todoist\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -7180,8 +7158,7 @@
    "glob_dirs": [
     "%APPDATA%\\TickTick\\Cache",
     "%APPDATA%\\TickTick\\Code Cache",
-    "%APPDATA%\\TickTick\\GPUCache",
-    "%APPDATA%\\TickTick\\logs"
+    "%APPDATA%\\TickTick\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -7217,8 +7194,7 @@
    "glob_dirs": [
     "%APPDATA%\\ClickUp\\Cache",
     "%APPDATA%\\ClickUp\\Code Cache",
-    "%APPDATA%\\ClickUp\\GPUCache",
-    "%APPDATA%\\ClickUp\\logs"
+    "%APPDATA%\\ClickUp\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -7254,8 +7230,7 @@
    "glob_dirs": [
     "%APPDATA%\\Taskade\\Cache",
     "%APPDATA%\\Taskade\\Code Cache",
-    "%APPDATA%\\Taskade\\GPUCache",
-    "%APPDATA%\\Taskade\\logs"
+    "%APPDATA%\\Taskade\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -7363,8 +7338,7 @@
    "glob_dirs": [
     "%APPDATA%\\Framer\\Cache",
     "%APPDATA%\\Framer\\Code Cache",
-    "%APPDATA%\\Framer\\GPUCache",
-    "%APPDATA%\\Framer\\logs"
+    "%APPDATA%\\Framer\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -7400,8 +7374,7 @@
    "glob_dirs": [
     "%APPDATA%\\Zeplin\\Cache",
     "%APPDATA%\\Zeplin\\Code Cache",
-    "%APPDATA%\\Zeplin\\GPUCache",
-    "%APPDATA%\\Zeplin\\logs"
+    "%APPDATA%\\Zeplin\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -7508,8 +7481,7 @@
    "glob_dirs": [
     "%APPDATA%\\Smallpdf\\Cache",
     "%APPDATA%\\Smallpdf\\Code Cache",
-    "%APPDATA%\\Smallpdf\\GPUCache",
-    "%APPDATA%\\Smallpdf\\logs"
+    "%APPDATA%\\Smallpdf\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -7715,8 +7687,7 @@
    "glob_dirs": [
     "%LOCALAPPDATA%\\Amazon Music\\Cache",
     "%LOCALAPPDATA%\\Amazon Music\\Code Cache",
-    "%LOCALAPPDATA%\\Amazon Music\\GPUCache",
-    "%LOCALAPPDATA%\\Amazon Music\\logs"
+    "%LOCALAPPDATA%\\Amazon Music\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -7752,8 +7723,7 @@
    "glob_dirs": [
     "%APPDATA%\\TIDAL\\Cache",
     "%APPDATA%\\TIDAL\\Code Cache",
-    "%APPDATA%\\TIDAL\\GPUCache",
-    "%APPDATA%\\TIDAL\\logs"
+    "%APPDATA%\\TIDAL\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -7789,8 +7759,7 @@
    "glob_dirs": [
     "%APPDATA%\\Deezer\\Cache",
     "%APPDATA%\\Deezer\\Code Cache",
-    "%APPDATA%\\Deezer\\GPUCache",
-    "%APPDATA%\\Deezer\\logs"
+    "%APPDATA%\\Deezer\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -7826,8 +7795,7 @@
    "glob_dirs": [
     "%APPDATA%\\YouTube Music\\Cache",
     "%APPDATA%\\YouTube Music\\Code Cache",
-    "%APPDATA%\\YouTube Music\\GPUCache",
-    "%APPDATA%\\YouTube Music\\logs"
+    "%APPDATA%\\YouTube Music\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -7863,8 +7831,7 @@
    "glob_dirs": [
     "%APPDATA%\\SoundCloud\\Cache",
     "%APPDATA%\\SoundCloud\\Code Cache",
-    "%APPDATA%\\SoundCloud\\GPUCache",
-    "%APPDATA%\\SoundCloud\\logs"
+    "%APPDATA%\\SoundCloud\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -8002,8 +7969,7 @@
    "glob_dirs": [
     "%APPDATA%\\streamlabs\\Cache",
     "%APPDATA%\\streamlabs\\Code Cache",
-    "%APPDATA%\\streamlabs\\GPUCache",
-    "%APPDATA%\\streamlabs\\logs"
+    "%APPDATA%\\streamlabs\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -8132,7 +8098,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_snagit",
@@ -8166,41 +8135,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
-  },
-  {
-   "key": "app_filmora_intl",
-   "name": "Filmora 缓存",
-   "desc": "Wondershare Filmora 的缓存",
-   "tier": "standard",
-   "glob_dirs": [
-    "%LOCALAPPDATA%\\Wondershare\\Filmora\\Cache"
    ],
-   "prune_dirs": true,
-   "min_age_minutes": 60,
-   "exclude": [
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pdf",
-    ".txt",
-    ".md",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".mp3",
-    ".mp4",
-    ".wav",
-    ".zip",
-    ".rar",
-    ".7z"
-   ]
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_topaz",
@@ -8268,7 +8206,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_luminar",
@@ -8277,41 +8218,6 @@
    "tier": "standard",
    "glob_dirs": [
     "%LOCALAPPDATA%\\Skylum\\Luminar\\Cache"
-   ],
-   "prune_dirs": true,
-   "min_age_minutes": 60,
-   "exclude": [
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pdf",
-    ".txt",
-    ".md",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".mp3",
-    ".mp4",
-    ".wav",
-    ".zip",
-    ".rar",
-    ".7z"
-   ]
-  },
-  {
-   "key": "app_gog",
-   "name": "GOG Galaxy 缓存",
-   "desc": "GOG Galaxy 的网页缓存与日志",
-   "tier": "standard",
-   "glob_dirs": [
-    "%LOCALAPPDATA%\\GOG.com\\Galaxy\\webcache",
-    "%LOCALAPPDATA%\\GOG.com\\Galaxy\\logs"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -8371,7 +8277,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_minecraft",
@@ -8405,7 +8314,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_curseforge",
@@ -8415,8 +8327,7 @@
    "glob_dirs": [
     "%APPDATA%\\CurseForge\\Cache",
     "%APPDATA%\\CurseForge\\Code Cache",
-    "%APPDATA%\\CurseForge\\GPUCache",
-    "%APPDATA%\\CurseForge\\logs"
+    "%APPDATA%\\CurseForge\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -8452,8 +8363,7 @@
    "glob_dirs": [
     "%APPDATA%\\Vortex\\Cache",
     "%APPDATA%\\Vortex\\Code Cache",
-    "%APPDATA%\\Vortex\\GPUCache",
-    "%APPDATA%\\Vortex\\logs"
+    "%APPDATA%\\Vortex\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -8489,8 +8399,7 @@
    "glob_dirs": [
     "%APPDATA%\\Modrinth\\Cache",
     "%APPDATA%\\Modrinth\\Code Cache",
-    "%APPDATA%\\Modrinth\\GPUCache",
-    "%APPDATA%\\Modrinth\\logs"
+    "%APPDATA%\\Modrinth\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -8584,7 +8493,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_dolphin",
@@ -8618,7 +8530,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_pcsx2",
@@ -8652,7 +8567,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_ppsspp",
@@ -8720,7 +8638,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_steamvr",
@@ -8754,7 +8675,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_wargaming",
@@ -8856,7 +8780,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_rockstar",
@@ -8890,7 +8817,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_amazongames",
@@ -8968,8 +8898,7 @@
    "glob_dirs": [
     "%APPDATA%\\heroic\\Cache",
     "%APPDATA%\\heroic\\Code Cache",
-    "%APPDATA%\\heroic\\GPUCache",
-    "%APPDATA%\\heroic\\logs"
+    "%APPDATA%\\heroic\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -9029,7 +8958,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_motrix",
@@ -9039,8 +8971,7 @@
    "glob_dirs": [
     "%APPDATA%\\Motrix\\Cache",
     "%APPDATA%\\Motrix\\Code Cache",
-    "%APPDATA%\\Motrix\\GPUCache",
-    "%APPDATA%\\Motrix\\logs"
+    "%APPDATA%\\Motrix\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -9134,7 +9065,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_owncloud",
@@ -9168,7 +9102,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_megasync",
@@ -9202,7 +9139,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_syncthing",
@@ -9236,7 +9176,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_vscodium",
@@ -9246,8 +9189,7 @@
    "glob_dirs": [
     "%APPDATA%\\VSCodium\\Cache",
     "%APPDATA%\\VSCodium\\Code Cache",
-    "%APPDATA%\\VSCodium\\GPUCache",
-    "%APPDATA%\\VSCodium\\logs"
+    "%APPDATA%\\VSCodium\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -9283,8 +9225,7 @@
    "glob_dirs": [
     "%APPDATA%\\Windsurf\\Cache",
     "%APPDATA%\\Windsurf\\Code Cache",
-    "%APPDATA%\\Windsurf\\GPUCache",
-    "%APPDATA%\\Windsurf\\logs"
+    "%APPDATA%\\Windsurf\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -9320,8 +9261,7 @@
    "glob_dirs": [
     "%APPDATA%\\Trae\\Cache",
     "%APPDATA%\\Trae\\Code Cache",
-    "%APPDATA%\\Trae\\GPUCache",
-    "%APPDATA%\\Trae\\logs"
+    "%APPDATA%\\Trae\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -9381,7 +9321,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_pulsar",
@@ -9391,8 +9334,7 @@
    "glob_dirs": [
     "%APPDATA%\\Pulsar\\Cache",
     "%APPDATA%\\Pulsar\\Code Cache",
-    "%APPDATA%\\Pulsar\\GPUCache",
-    "%APPDATA%\\Pulsar\\logs"
+    "%APPDATA%\\Pulsar\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -9428,8 +9370,7 @@
    "glob_dirs": [
     "%APPDATA%\\Azure Data Studio\\Cache",
     "%APPDATA%\\Azure Data Studio\\Code Cache",
-    "%APPDATA%\\Azure Data Studio\\GPUCache",
-    "%APPDATA%\\Azure Data Studio\\logs"
+    "%APPDATA%\\Azure Data Studio\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -9463,8 +9404,7 @@
    "desc": "Android Studio Beta 的缓存与日志",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Google\\AndroidStudioBeta*\\caches",
-    "%LOCALAPPDATA%\\Google\\AndroidStudioBeta*\\log"
+    "%LOCALAPPDATA%\\Google\\AndroidStudioBeta*\\caches"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -9524,7 +9464,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_netbeans",
@@ -9566,8 +9509,7 @@
    "desc": "IntelliJ IDEA 旧版的缓存与日志",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\JetBrains\\IntelliJ*\\caches",
-    "%LOCALAPPDATA%\\JetBrains\\IntelliJ*\\log"
+    "%LOCALAPPDATA%\\JetBrains\\IntelliJ*\\caches"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -9603,8 +9545,7 @@
    "glob_dirs": [
     "%APPDATA%\\pgAdmin\\Cache",
     "%APPDATA%\\pgAdmin\\Code Cache",
-    "%APPDATA%\\pgAdmin\\GPUCache",
-    "%APPDATA%\\pgAdmin\\logs"
+    "%APPDATA%\\pgAdmin\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -9640,8 +9581,7 @@
    "glob_dirs": [
     "%APPDATA%\\RedisInsight\\Cache",
     "%APPDATA%\\RedisInsight\\Code Cache",
-    "%APPDATA%\\RedisInsight\\GPUCache",
-    "%APPDATA%\\RedisInsight\\logs"
+    "%APPDATA%\\RedisInsight\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -9677,8 +9617,7 @@
    "glob_dirs": [
     "%APPDATA%\\Beekeeper Studio\\Cache",
     "%APPDATA%\\Beekeeper Studio\\Code Cache",
-    "%APPDATA%\\Beekeeper Studio\\GPUCache",
-    "%APPDATA%\\Beekeeper Studio\\logs"
+    "%APPDATA%\\Beekeeper Studio\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -9714,8 +9653,7 @@
    "glob_dirs": [
     "%APPDATA%\\Another Redis Desktop Manager\\Cache",
     "%APPDATA%\\Another Redis Desktop Manager\\Code Cache",
-    "%APPDATA%\\Another Redis Desktop Manager\\GPUCache",
-    "%APPDATA%\\Another Redis Desktop Manager\\logs"
+    "%APPDATA%\\Another Redis Desktop Manager\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -9775,7 +9713,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_navicat",
@@ -9877,7 +9818,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_dbeaver",
@@ -9911,7 +9855,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_heidi",
@@ -9945,7 +9892,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_bruno",
@@ -9955,8 +9905,7 @@
    "glob_dirs": [
     "%APPDATA%\\Bruno\\Cache",
     "%APPDATA%\\Bruno\\Code Cache",
-    "%APPDATA%\\Bruno\\GPUCache",
-    "%APPDATA%\\Bruno\\logs"
+    "%APPDATA%\\Bruno\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -10088,7 +10037,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_filezilla",
@@ -10122,7 +10074,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_cyberduck",
@@ -10156,7 +10111,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_xshell",
@@ -10190,7 +10148,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_mobaxterm",
@@ -10224,7 +10185,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_parsec",
@@ -10258,7 +10222,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_rustdesk",
@@ -10293,7 +10260,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_splashtop",
@@ -10327,7 +10297,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_gitkraken",
@@ -10337,8 +10310,7 @@
    "glob_dirs": [
     "%APPDATA%\\GitKraken\\Cache",
     "%APPDATA%\\GitKraken\\Code Cache",
-    "%APPDATA%\\GitKraken\\GPUCache",
-    "%APPDATA%\\GitKraken\\logs"
+    "%APPDATA%\\GitKraken\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -10398,7 +10370,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_fork",
@@ -10466,7 +10441,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_wireshark",
@@ -10500,7 +10478,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_fiddler",
@@ -10534,7 +10515,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_charles",
@@ -10568,7 +10552,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_poe",
@@ -10578,8 +10565,7 @@
    "glob_dirs": [
     "%APPDATA%\\Poe\\Cache",
     "%APPDATA%\\Poe\\Code Cache",
-    "%APPDATA%\\Poe\\GPUCache",
-    "%APPDATA%\\Poe\\logs"
+    "%APPDATA%\\Poe\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -10615,8 +10601,7 @@
    "glob_dirs": [
     "%APPDATA%\\CherryStudio\\Cache",
     "%APPDATA%\\CherryStudio\\Code Cache",
-    "%APPDATA%\\CherryStudio\\GPUCache",
-    "%APPDATA%\\CherryStudio\\logs"
+    "%APPDATA%\\CherryStudio\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -10652,8 +10637,7 @@
    "glob_dirs": [
     "%APPDATA%\\xyz.chatboxapp.app\\Cache",
     "%APPDATA%\\xyz.chatboxapp.app\\Code Cache",
-    "%APPDATA%\\xyz.chatboxapp.app\\GPUCache",
-    "%APPDATA%\\xyz.chatboxapp.app\\logs"
+    "%APPDATA%\\xyz.chatboxapp.app\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -10689,8 +10673,7 @@
    "glob_dirs": [
     "%APPDATA%\\Jan\\Cache",
     "%APPDATA%\\Jan\\Code Cache",
-    "%APPDATA%\\Jan\\GPUCache",
-    "%APPDATA%\\Jan\\logs"
+    "%APPDATA%\\Jan\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -10750,7 +10733,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_ollama",
@@ -10784,7 +10770,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_deepchat",
@@ -11034,7 +11023,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_openwebui",
@@ -11080,8 +11072,7 @@
    "glob_dirs": [
     "%APPDATA%\\Lens\\Cache",
     "%APPDATA%\\Lens\\Code Cache",
-    "%APPDATA%\\Lens\\GPUCache",
-    "%APPDATA%\\Lens\\logs"
+    "%APPDATA%\\Lens\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -11141,7 +11132,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_podman",
@@ -11151,8 +11145,7 @@
    "glob_dirs": [
     "%APPDATA%\\Podman Desktop\\Cache",
     "%APPDATA%\\Podman Desktop\\Code Cache",
-    "%APPDATA%\\Podman Desktop\\GPUCache",
-    "%APPDATA%\\Podman Desktop\\logs"
+    "%APPDATA%\\Podman Desktop\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -11212,7 +11205,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_vmware",
@@ -11246,7 +11242,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_multipass",
@@ -11280,7 +11279,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_minikube",
@@ -11314,7 +11316,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_adguard",
@@ -11348,7 +11353,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_malwarebytes",
@@ -11382,7 +11390,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_avast",
@@ -11416,7 +11427,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_avira",
@@ -11450,7 +11464,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_eset",
@@ -11484,7 +11501,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_kaspersky",
@@ -11518,7 +11538,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_bitdefender",
@@ -11552,7 +11575,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_nordvpn",
@@ -11586,7 +11612,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_protonvpn",
@@ -11620,7 +11649,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_windscribe",
@@ -11654,7 +11686,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_expressvpn",
@@ -11688,7 +11723,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_surfshark",
@@ -11722,7 +11760,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_mullvad",
@@ -11756,7 +11797,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_ghub",
@@ -11960,7 +12004,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_nvidia_app",
@@ -11994,7 +12041,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_elgato",
@@ -12062,7 +12112,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_samsung_magician",
@@ -12096,7 +12149,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_intel_dsa",
@@ -12130,7 +12186,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_realtek",
@@ -12164,7 +12223,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_msi",
@@ -12198,7 +12260,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_lenovo_vantage",
@@ -12232,7 +12297,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_dell",
@@ -12266,7 +12334,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_hp",
@@ -12300,7 +12371,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_asus",
@@ -12334,7 +12408,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_tradingview",
@@ -12344,8 +12421,7 @@
    "glob_dirs": [
     "%APPDATA%\\TradingView\\Cache",
     "%APPDATA%\\TradingView\\Code Cache",
-    "%APPDATA%\\TradingView\\GPUCache",
-    "%APPDATA%\\TradingView\\logs"
+    "%APPDATA%\\TradingView\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -12381,8 +12457,7 @@
    "glob_dirs": [
     "%APPDATA%\\Binance\\Cache",
     "%APPDATA%\\Binance\\Code Cache",
-    "%APPDATA%\\Binance\\GPUCache",
-    "%APPDATA%\\Binance\\logs"
+    "%APPDATA%\\Binance\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -12454,8 +12529,7 @@
    "glob_dirs": [
     "%APPDATA%\\Ledger Live\\Cache",
     "%APPDATA%\\Ledger Live\\Code Cache",
-    "%APPDATA%\\Ledger Live\\GPUCache",
-    "%APPDATA%\\Ledger Live\\logs"
+    "%APPDATA%\\Ledger Live\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -12491,8 +12565,7 @@
    "glob_dirs": [
     "%APPDATA%\\Exodus\\Cache",
     "%APPDATA%\\Exodus\\Code Cache",
-    "%APPDATA%\\Exodus\\GPUCache",
-    "%APPDATA%\\Exodus\\logs"
+    "%APPDATA%\\Exodus\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -12528,8 +12601,7 @@
    "glob_dirs": [
     "%APPDATA%\\Trezor Suite\\Cache",
     "%APPDATA%\\Trezor Suite\\Code Cache",
-    "%APPDATA%\\Trezor Suite\\GPUCache",
-    "%APPDATA%\\Trezor Suite\\logs"
+    "%APPDATA%\\Trezor Suite\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -12725,371 +12797,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
-  },
-  {
-   "key": "sweep_tencent_local",
-   "name": "腾讯系应用缓存（通配）",
-   "desc": "腾讯系各应用的缓存与日志目录汇总",
-   "tier": "standard",
-   "glob_dirs": [
-    "%LOCALAPPDATA%\\Tencent\\*\\Cache",
-    "%LOCALAPPDATA%\\Tencent\\*\\Logs",
-    "%LOCALAPPDATA%\\Tencent\\*\\logs",
-    "%LOCALAPPDATA%\\Tencent\\*\\Temp"
    ],
-   "prune_dirs": true,
-   "min_age_minutes": 60,
-   "exclude": [
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pdf",
-    ".txt",
-    ".md",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".mp3",
-    ".mp4",
-    ".wav",
-    ".zip",
-    ".rar",
-    ".7z"
-   ]
-  },
-  {
-   "key": "sweep_tencent_roaming",
-   "name": "腾讯系应用缓存（漫游）",
-   "desc": "腾讯系各应用在漫游目录的缓存与日志",
-   "tier": "standard",
-   "glob_dirs": [
-    "%APPDATA%\\Tencent\\*\\Cache",
-    "%APPDATA%\\Tencent\\*\\Logs",
-    "%APPDATA%\\Tencent\\*\\logs",
-    "%APPDATA%\\Tencent\\*\\Temp"
-   ],
-   "prune_dirs": true,
-   "min_age_minutes": 60,
-   "exclude": [
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pdf",
-    ".txt",
-    ".md",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".mp3",
-    ".mp4",
-    ".wav",
-    ".zip",
-    ".rar",
-    ".7z"
-   ]
-  },
-  {
-   "key": "sweep_netease_local",
-   "name": "网易系应用缓存（通配）",
-   "desc": "网易系各应用的缓存与日志汇总",
-   "tier": "standard",
-   "glob_dirs": [
-    "%LOCALAPPDATA%\\Netease\\*\\Cache",
-    "%LOCALAPPDATA%\\Netease\\*\\Logs",
-    "%LOCALAPPDATA%\\Netease\\*\\logs",
-    "%LOCALAPPDATA%\\Netease\\*\\Temp"
-   ],
-   "prune_dirs": true,
-   "min_age_minutes": 60,
-   "exclude": [
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pdf",
-    ".txt",
-    ".md",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".mp3",
-    ".mp4",
-    ".wav",
-    ".zip",
-    ".rar",
-    ".7z"
-   ]
-  },
-  {
-   "key": "sweep_baidu_roaming",
-   "name": "百度系应用缓存（通配）",
-   "desc": "百度系各应用的缓存与日志汇总",
-   "tier": "standard",
-   "glob_dirs": [
-    "%APPDATA%\\baidu\\*\\Cache",
-    "%APPDATA%\\baidu\\*\\Logs",
-    "%APPDATA%\\baidu\\*\\logs",
-    "%APPDATA%\\baidu\\*\\Temp"
-   ],
-   "prune_dirs": true,
-   "min_age_minutes": 60,
-   "exclude": [
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pdf",
-    ".txt",
-    ".md",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".mp3",
-    ".mp4",
-    ".wav",
-    ".zip",
-    ".rar",
-    ".7z"
-   ]
-  },
-  {
-   "key": "sweep_kingsoft_local",
-   "name": "金山系应用缓存（通配）",
-   "desc": "金山系各应用的缓存与日志汇总",
-   "tier": "standard",
-   "glob_dirs": [
-    "%LOCALAPPDATA%\\Kingsoft\\*\\Cache",
-    "%LOCALAPPDATA%\\Kingsoft\\*\\Logs",
-    "%LOCALAPPDATA%\\Kingsoft\\*\\logs",
-    "%LOCALAPPDATA%\\Kingsoft\\*\\Temp"
-   ],
-   "prune_dirs": true,
-   "min_age_minutes": 60,
-   "exclude": [
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pdf",
-    ".txt",
-    ".md",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".mp3",
-    ".mp4",
-    ".wav",
-    ".zip",
-    ".rar",
-    ".7z"
-   ]
-  },
-  {
-   "key": "sweep_sogou_local",
-   "name": "搜狗系应用缓存（通配）",
-   "desc": "搜狗系各应用的缓存与日志汇总",
-   "tier": "standard",
-   "glob_dirs": [
-    "%LOCALAPPDATA%\\Sogou\\*\\Cache",
-    "%LOCALAPPDATA%\\Sogou\\*\\Logs",
-    "%LOCALAPPDATA%\\Sogou\\*\\logs",
-    "%LOCALAPPDATA%\\Sogou\\*\\Temp"
-   ],
-   "prune_dirs": true,
-   "min_age_minutes": 60,
-   "exclude": [
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pdf",
-    ".txt",
-    ".md",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".mp3",
-    ".mp4",
-    ".wav",
-    ".zip",
-    ".rar",
-    ".7z"
-   ]
-  },
-  {
-   "key": "sweep_360_local",
-   "name": "360系应用缓存（通配）",
-   "desc": "360 系各应用的缓存与日志汇总",
-   "tier": "standard",
-   "glob_dirs": [
-    "%LOCALAPPDATA%\\360\\*\\Cache",
-    "%LOCALAPPDATA%\\360\\*\\Logs",
-    "%LOCALAPPDATA%\\360\\*\\logs",
-    "%LOCALAPPDATA%\\360\\*\\Temp"
-   ],
-   "prune_dirs": true,
-   "min_age_minutes": 60,
-   "exclude": [
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pdf",
-    ".txt",
-    ".md",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".mp3",
-    ".mp4",
-    ".wav",
-    ".zip",
-    ".rar",
-    ".7z"
-   ]
-  },
-  {
-   "key": "sweep_microsoft_local",
-   "name": "微软系应用缓存（通配）",
-   "desc": "微软系各应用在 Local 的缓存目录汇总",
-   "tier": "standard",
-   "glob_dirs": [
-    "%LOCALAPPDATA%\\Microsoft\\*\\Cache",
-    "%LOCALAPPDATA%\\Microsoft\\*\\Logs"
-   ],
-   "prune_dirs": true,
-   "min_age_minutes": 60,
-   "exclude": [
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pdf",
-    ".txt",
-    ".md",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".mp3",
-    ".mp4",
-    ".wav",
-    ".zip",
-    ".rar",
-    ".7z"
-   ]
-  },
-  {
-   "key": "sweep_google_local",
-   "name": "谷歌系应用缓存（通配）",
-   "desc": "谷歌系各应用的缓存目录汇总",
-   "tier": "standard",
-   "glob_dirs": [
-    "%LOCALAPPDATA%\\Google\\*\\Cache",
-    "%LOCALAPPDATA%\\Google\\*\\Code Cache"
-   ],
-   "prune_dirs": true,
-   "min_age_minutes": 60,
-   "exclude": [
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pdf",
-    ".txt",
-    ".md",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".mp3",
-    ".mp4",
-    ".wav",
-    ".zip",
-    ".rar",
-    ".7z"
-   ]
-  },
-  {
-   "key": "sweep_adobe_local",
-   "name": "Adobe 系缓存（通配）",
-   "desc": "Adobe 各应用的缓存目录汇总",
-   "tier": "standard",
-   "glob_dirs": [
-    "%LOCALAPPDATA%\\Adobe\\*\\Cache",
-    "%LOCALAPPDATA%\\Adobe\\*\\Media Cache"
-   ],
-   "prune_dirs": true,
-   "min_age_minutes": 60,
-   "exclude": [
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".pdf",
-    ".txt",
-    ".md",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".bmp",
-    ".mp3",
-    ".mp4",
-    ".wav",
-    ".zip",
-    ".rar",
-    ".7z"
-   ]
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_xbox",
@@ -13191,7 +12902,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_valorant_logs",
@@ -13225,7 +12939,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_genshin_logs",
@@ -13259,7 +12976,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_starrail_logs",
@@ -13293,7 +13013,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_zzz_logs",
@@ -13327,7 +13050,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_wuthering_logs",
@@ -13361,7 +13087,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_naraka_logs",
@@ -13395,7 +13124,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_deltaforce_logs",
@@ -13429,7 +13161,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_arknights_logs",
@@ -13463,7 +13198,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_bluearchive_logs",
@@ -13497,7 +13235,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_snowbreak_logs",
@@ -13531,7 +13272,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_punishing_logs",
@@ -13565,7 +13309,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_aether_logs",
@@ -13599,7 +13346,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_neverness_logs",
@@ -13633,7 +13383,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_infinity_logs",
@@ -13667,7 +13420,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_love_logs",
@@ -13701,7 +13457,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_reverse1999_logs",
@@ -13735,7 +13494,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_pathnowhere_logs",
@@ -13769,7 +13531,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_girls_logs",
@@ -13803,7 +13568,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_neural_logs",
@@ -13837,7 +13605,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_exilium_logs",
@@ -13905,7 +13676,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_honkai3_logs",
@@ -13939,7 +13713,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_tears_logs",
@@ -13973,7 +13750,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_azurlane_logs",
@@ -14007,7 +13787,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_fgo_logs",
@@ -14041,7 +13824,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_umamusume_logs",
@@ -14075,7 +13861,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_priconne_logs",
@@ -14109,7 +13898,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_arknights2_logs",
@@ -14143,7 +13935,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_silverpalace_logs",
@@ -14177,7 +13972,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_duet_logs",
@@ -14211,7 +14009,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_neverness2_logs",
@@ -14245,7 +14046,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_ccleaner",
@@ -14279,7 +14083,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_wisecare",
@@ -14313,7 +14120,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_glary",
@@ -14347,7 +14157,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_iobit",
@@ -14381,7 +14194,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_ashampoo",
@@ -14415,7 +14231,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_drivercloud",
@@ -14449,7 +14268,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_driverlife",
@@ -14483,7 +14305,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_driverwizard",
@@ -14517,7 +14342,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_mydrivers",
@@ -14551,7 +14379,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_cube",
@@ -14585,7 +14416,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_dismpp",
@@ -14619,7 +14453,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_tencent_docs2",
@@ -14653,7 +14490,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_kdocs",
@@ -15271,7 +15111,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_kuaishou",
@@ -15339,7 +15182,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_acfun",
@@ -16155,7 +16001,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_haoshitong",
@@ -16189,7 +16038,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_xiaoyu",
@@ -16223,7 +16075,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_dingtalk_class",
@@ -16257,7 +16112,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_feishu_meeting",
@@ -16291,7 +16149,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_tencent_edu",
@@ -16299,9 +16160,7 @@
    "desc": "腾讯教育客户端的缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Tencent\\Edu\\Cache",
-    "%LOCALAPPDATA%\\Tencent\\Edu\\Logs",
-    "%LOCALAPPDATA%\\Tencent\\Edu\\logs"
+    "%LOCALAPPDATA%\\Tencent\\Edu\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -16981,9 +16840,7 @@
    "desc": "腾讯课堂的缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Tencent\\Classroom\\Cache",
-    "%LOCALAPPDATA%\\Tencent\\Classroom\\Logs",
-    "%LOCALAPPDATA%\\Tencent\\Classroom\\logs"
+    "%LOCALAPPDATA%\\Tencent\\Classroom\\Cache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -17053,8 +16910,7 @@
    "glob_dirs": [
     "%APPDATA%\\Tower\\Cache",
     "%APPDATA%\\Tower\\Code Cache",
-    "%APPDATA%\\Tower\\GPUCache",
-    "%APPDATA%\\Tower\\logs"
+    "%APPDATA%\\Tower\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -17090,8 +16946,7 @@
    "glob_dirs": [
     "%APPDATA%\\GitButler\\Cache",
     "%APPDATA%\\GitButler\\Code Cache",
-    "%APPDATA%\\GitButler\\GPUCache",
-    "%APPDATA%\\GitButler\\logs"
+    "%APPDATA%\\GitButler\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -17151,7 +17006,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_delta",
@@ -17233,8 +17091,7 @@
    "glob_dirs": [
     "%APPDATA%\\Tabby\\Cache",
     "%APPDATA%\\Tabby\\Code Cache",
-    "%APPDATA%\\Tabby\\GPUCache",
-    "%APPDATA%\\Tabby\\logs"
+    "%APPDATA%\\Tabby\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -17294,7 +17151,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_finalshell",
@@ -17328,7 +17188,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_xftp",
@@ -17362,7 +17225,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_flashfxp",
@@ -17396,7 +17262,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_cuteftp",
@@ -17430,7 +17299,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_smartftp",
@@ -17464,7 +17336,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_coreftp",
@@ -17498,7 +17373,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_ultraedit",
@@ -17736,7 +17614,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_winmerge",
@@ -17770,7 +17651,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_araxis",
@@ -17804,7 +17688,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_010editor",
@@ -17872,7 +17759,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_processhacker",
@@ -17906,7 +17796,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_everything",
@@ -17940,7 +17833,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_listary",
@@ -17974,7 +17870,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_quicker",
@@ -18008,7 +17907,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_rubick",
@@ -18078,7 +17980,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_powertoys",
@@ -18112,7 +18017,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_wox",
@@ -18146,7 +18054,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_snipaste",
@@ -18180,7 +18091,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_sharex",
@@ -18214,7 +18128,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_greenshot",
@@ -18248,7 +18165,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_faststone",
@@ -18282,7 +18202,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_pictus",
@@ -18328,8 +18251,7 @@
    "glob_dirs": [
     "%APPDATA%\\marktext\\Cache",
     "%APPDATA%\\marktext\\Code Cache",
-    "%APPDATA%\\marktext\\GPUCache",
-    "%APPDATA%\\marktext\\logs"
+    "%APPDATA%\\marktext\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -18543,8 +18465,7 @@
    "glob_dirs": [
     "%APPDATA%\\Mem\\Cache",
     "%APPDATA%\\Mem\\Code Cache",
-    "%APPDATA%\\Mem\\GPUCache",
-    "%APPDATA%\\Mem\\logs"
+    "%APPDATA%\\Mem\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -18580,8 +18501,7 @@
    "glob_dirs": [
     "%APPDATA%\\Heptabase\\Cache",
     "%APPDATA%\\Heptabase\\Code Cache",
-    "%APPDATA%\\Heptabase\\GPUCache",
-    "%APPDATA%\\Heptabase\\logs"
+    "%APPDATA%\\Heptabase\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -18653,8 +18573,7 @@
    "glob_dirs": [
     "%APPDATA%\\Tana\\Cache",
     "%APPDATA%\\Tana\\Code Cache",
-    "%APPDATA%\\Tana\\GPUCache",
-    "%APPDATA%\\Tana\\logs"
+    "%APPDATA%\\Tana\\GPUCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -18714,7 +18633,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_citrix",
@@ -18748,7 +18670,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_vmware_horizon",
@@ -18782,7 +18707,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_forticlient",
@@ -18816,7 +18744,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_globalprotect",
@@ -18850,7 +18781,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_cisco_anyconnect",
@@ -18884,7 +18818,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_pulse",
@@ -18918,7 +18855,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_zscaler",
@@ -18952,7 +18892,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_okta",
@@ -18986,7 +18929,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_duo",
@@ -19020,7 +18966,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_salesforce",
@@ -19682,7 +19631,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_etax",
@@ -19750,7 +19702,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_bank_ccb",
@@ -19784,7 +19739,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_bank_abc",
@@ -19818,7 +19776,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_bank_boc",
@@ -19852,7 +19813,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_bank_cmb",
@@ -19886,7 +19850,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_didi",
@@ -20464,7 +20431,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_miktex",
@@ -20498,7 +20468,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_rstudio",
@@ -20636,7 +20609,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_stata",
@@ -20738,7 +20714,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_maxqda",
@@ -20772,7 +20751,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_endnote",
@@ -20908,7 +20890,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_huion",
@@ -20942,7 +20927,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_gaomon",
@@ -20976,7 +20964,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_ugee",
@@ -21010,7 +21001,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_focusrite",
@@ -21044,7 +21038,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_ua",
@@ -21078,7 +21075,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_native",
@@ -21112,7 +21112,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_serato",
@@ -21146,7 +21149,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_rekordbox",
@@ -21180,7 +21186,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_virtualdj",
@@ -21214,7 +21223,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_flstudio",
@@ -21248,7 +21260,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_ableton",
@@ -21282,7 +21297,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_cubase",
@@ -21316,7 +21334,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_studioone",
@@ -21350,7 +21371,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_reaper",
@@ -21384,7 +21408,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_protools",
@@ -21418,7 +21445,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_blender",
@@ -21554,7 +21584,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_acdsee",

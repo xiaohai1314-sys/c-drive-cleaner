@@ -20,12 +20,22 @@ def match_name(name: str, patterns) -> bool:
     return any(fnmatch.fnmatch(lowered, p.lower()) for p in patterns)
 
 
+def _exclude_patterns(patterns):
+    """把规则中的裸扩展名（如 .pdf）解释为完整文件名后缀。"""
+    return tuple(
+        "*" + pattern
+        if (pattern.startswith(".") and pattern[1:].isascii()
+            and pattern[1:].isalnum()) else pattern
+        for pattern in patterns
+    )
+
+
 def name_allowed(name: str, cat) -> bool:
     """patterns 命中且未被 exclude 排除（规则 v2 的 filtration）。"""
     if not match_name(name, getattr(cat, "patterns", ("*",))):
         return False
     exclude = getattr(cat, "exclude", ()) or ()
-    if exclude and match_name(name, exclude):
+    if exclude and match_name(name, _exclude_patterns(exclude)):
         return False
     return True
 

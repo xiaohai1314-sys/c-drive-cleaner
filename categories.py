@@ -38,6 +38,7 @@ class Category:
     os_min: str = ""                # 适用系统版本下限，如 "10.0"
     os_max: str = ""                # 适用系统版本上限（不含）
     recycle: bool = False           # 判定把握不高的类别改送回收站，可恢复
+    irreversible_log: bool = False  # 日志删除不可恢复，必须在选择前提示
 
 
 def _env(*parts) -> str:
@@ -178,6 +179,7 @@ def _load_external_rules():
             detect=tuple(item.get("detect", []) or []),
             os_min=str(item.get("os_min", "") or ""),
             os_max=str(item.get("os_max", "") or ""),
+            irreversible_log=bool(item.get("irreversible_log", False)),
         ))
     return cats
 

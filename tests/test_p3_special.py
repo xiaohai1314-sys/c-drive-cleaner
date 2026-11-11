@@ -21,6 +21,7 @@ import ruleupdate
 import safepath
 import scanner
 import utils
+import main
 
 FAKE_ENV = {
     "LOCALAPPDATA": r"C:\Users\T\AppData\Local",
@@ -152,6 +153,103 @@ class ShippedRulesTests(unittest.TestCase):
                         blocked.add((cat["key"], target))
         self.assertEqual(blocked - KNOWN_BLOCKED, set())
         self.assertTrue(blocked <= KNOWN_BLOCKED)
+
+
+class P3RuleRegressionTests(unittest.TestCase):
+    @staticmethod
+    def _new_rules():
+        return [item for item in _shipped()["categories"]
+                if "desc" in item and "describe" not in item]
+
+    @staticmethod
+    def _targets(item):
+        return (item.get("paths") or []) + (item.get("glob_dirs") or [])
+
+    @staticmethod
+    def _is_log_target(path):
+        return path.rstrip("\\/").replace("/", "\\").rsplit("\\", 1)[-1].casefold() in {"log", "logs"}
+
+    def test_every_new_suffix_exclusion_matches_full_filename(self):
+        for rule in self._new_rules():
+            cat = categories.Category(
+                key=rule["key"], name=rule["name"], tier=categories.STANDARD,
+                kind="files", describe=rule.get("desc", ""), paths=[],
+                exclude=tuple(rule.get("exclude", [])))
+            self.assertIn(".pdf", cat.exclude, rule["key"])
+            self.assertIn(".jpg", cat.exclude, rule["key"])
+            self.assertFalse(scanner.name_allowed("report.pdf", cat), rule["key"])
+            self.assertFalse(scanner.name_allowed("REPORT.PDF", cat), rule["key"])
+            self.assertFalse(scanner.name_allowed("photo.JPG", cat), rule["key"])
+
+    def test_suffix_excludes_preserve_pdf_and_still_clean_cache(self):
+        rule = next(item for item in self._new_rules() if item["key"] == "app_tim")
+        cat = categories.Category(
+            key=rule["key"], name=rule["name"], tier=categories.STANDARD,
+            kind="files", describe=rule.get("desc", ""), paths=[],
+            exclude=tuple(rule.get("exclude", [])))
+        self.assertFalse(scanner.name_allowed("report.pdf", cat))
+        self.assertFalse(scanner.name_allowed("REPORT.PDF", cat))
+        self.assertFalse(scanner.name_allowed("photo.JPG", cat))
+        self.assertTrue(scanner.name_allowed("report.pdf.tmp", cat))
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("report.pdf", "REPORT.PDF", "photo.JPG", "cache.tmp",
+                         "report.pdf.tmp"):
+                with open(os.path.join(tmp, name), "wb") as handle:
+                    handle.write(b"x")
+            cat.paths = [tmp]
+            self.assertEqual(scanner.scan_category(cat), (2, 2))
+            result = cleaner.clean_category(cat)
+            self.assertEqual(result.deleted, 2)
+            self.assertEqual(sorted(os.listdir(tmp)),
+                             ["REPORT.PDF", "photo.JPG", "report.pdf"])
+
+    def test_log_rules_are_separate_and_warn_before_selection(self):
+        rules = self._new_rules()
+        marked = [item for item in rules if item.get("irreversible_log")]
+        self.assertEqual(len(marked), 198)
+        for item in rules:
+            targets = self._targets(item)
+            log_targets = [path for path in targets if self._is_log_target(path)]
+            if log_targets:
+                self.assertEqual(len(log_targets), len(targets), item["key"])
+                self.assertTrue(item.get("irreversible_log"), item["key"])
+        for item in marked:
+            self.assertTrue(item.get("requires_confirm"), item["key"])
+            self.assertIn("无法从回收站恢复", item.get("warning", ""), item["key"])
+        tim = next(item for item in rules if item["key"] == "app_tim")
+        self.assertTrue(any(path.endswith("\\Cache") for path in self._targets(tim)))
+        self.assertFalse(any(self._is_log_target(path) for path in self._targets(tim)))
+
+    def test_log_card_name_warns_before_user_selects_it(self):
+        app = main.App.__new__(main.App)
+        cat = categories.Category(
+            key="log", name="腾讯会议日志", tier=categories.STANDARD,
+            kind="files", describe="", irreversible_log=True)
+        self.assertEqual(app._display_category_name(cat), "腾讯会议日志（日志不可恢复）")
+
+    def test_wide_vendor_rules_webcache_and_duplicate_targets_are_gone(self):
+        rules = self._new_rules()
+        keys = {item["key"] for item in rules}
+        self.assertFalse(any(key.startswith("sweep_") for key in keys))
+        self.assertNotIn("app_filmora_intl", keys)
+        self.assertNotIn("app_iron", keys)
+        owners = {}
+        for item in rules:
+            seen = set()
+            for target in self._targets(item):
+                normalized = target.replace("/", "\\").casefold()
+                self.assertNotIn(normalized, seen, item["key"])
+                self.assertNotIn(normalized, owners,
+                                 f"duplicate target: {owners.get(normalized)} and {item['key']}")
+                seen.add(normalized)
+                owners[normalized] = item["key"]
+                self.assertNotIn("webcache", normalized, item["key"])
+        arbitrary_webcache = r"%LOCALAPPDATA%\OtherApp\webcache"
+        self.assertFalse(safepath.under_remote_allowlist(_expand(arbitrary_webcache), FAKE_ENV))
+        self.assertTrue(ruleupdate.remote_target_allowed(arbitrary_webcache, FAKE_ENV))
+        webcache_backup = r"%LOCALAPPDATA%\OtherApp\webcache_backup"
+        self.assertFalse(safepath.under_remote_allowlist(_expand(webcache_backup), FAKE_ENV))
+        self.assertTrue(ruleupdate.remote_target_allowed(webcache_backup, FAKE_ENV))
 
 
 class LoaderEdgeTests(unittest.TestCase):
