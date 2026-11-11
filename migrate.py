@@ -156,20 +156,38 @@ def _fingerprint(path: str):
         info = os.lstat(path)
     except OSError:
         return None
-    if safepath.is_reparse_point(path):
+    if not stat.S_ISREG(info.st_mode) or safepath.is_reparse_point(path):
         return None
-    size = info.st_size
     digest = hashlib.sha256()
+    fd = None
     try:
-        with open(path, "rb") as handle:
-            while True:
-                block = handle.read(1024 * 1024)
-                if not block:
-                    break
-                digest.update(block)
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        fd = os.open(path, flags)
+        opened = os.fstat(fd)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_dev != info.st_dev
+                or opened.st_ino != info.st_ino):
+            return None
+        while True:
+            block = os.read(fd, 1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+        after = os.fstat(fd)
+        if (after.st_dev != opened.st_dev or after.st_ino != opened.st_ino
+                or after.st_size != opened.st_size
+                or getattr(after, "st_mtime_ns", after.st_mtime)
+                != getattr(opened, "st_mtime_ns", opened.st_mtime)):
+            return None
+        return (after.st_size, digest.hexdigest())
     except OSError:
         return None
-    return (size, digest.hexdigest())
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def _manifest(root: str) -> dict:
@@ -280,25 +298,51 @@ def _write_exclusive(path: str, data: bytes) -> str:
         try:
             view = memoryview(data)
             while view:
-                written = os.write(out, view)
-                if written <= 0:
-                    break
+                try:
+                    written = os.write(out, view)
+                except InterruptedError:
+                    continue
+                if written <= 0 or written > len(view):
+                    raise OSError("恢复文件写入不完整")
                 view = view[written:]
+            if os.fstat(out).st_size != len(data):
+                raise OSError("恢复文件长度不符")
             os.fsync(out)
             return candidate
+        except OSError:
+            if os.name == "nt":
+                try:
+                    safepath.unlink_regular(
+                        candidate, [os.path.dirname(candidate) or "."])
+                except OSError:
+                    pass
+            else:
+                parent_fd = None
+                try:
+                    parent_fd = _open_parent_dirfd(os.path.dirname(candidate) or ".")
+                    safepath._unlink_name_if_inode(
+                        os.path.basename(candidate), parent_fd, os.fstat(out), candidate)
+                except OSError:
+                    # A failed cleanup is still not a successful restoration.
+                    pass
+                finally:
+                    if parent_fd is not None:
+                        os.close(parent_fd)
         finally:
             os.close(out)
     return ""
 
 
-def _verified_unlink(path: str, expected_size: int, expected_hash: str):
+def _verified_unlink(path: str, expected_size: int, expected_hash: str,
+                     survivor_check=None):
     """打开后核对，再删除。返回 (是否干净删除, 说明)。
 
-    POSIX 上删除后文件描述符仍指着原来的 inode。若大小、mtime 或摘要
-    变了，就把该 inode 的内容写回原路径。链接数不为 0 表示删到的不是它。
+    POSIX 上先把目录项移入隔离目录并保留保护硬链接；最终校验通过后才
+    删除保护链接。校验失败时把原 inode 放回，不依赖可能短写的内容重建。
     """
     if os.name == "nt":
-        return _verified_unlink_windows(path, expected_size, expected_hash), ""
+        return _verified_unlink_windows(
+            path, expected_size, expected_hash, survivor_check), ""
     parent = os.path.dirname(path) or "."
     name = os.path.basename(path)
     try:
@@ -334,7 +378,45 @@ def _verified_unlink(path: str, expected_size: int, expected_hash: str):
                     or again.st_size != expected_size
                     or named.st_dev != info.st_dev or named.st_ino != info.st_ino):
                 return False, ""
-            os.unlink(name, dir_fd=dirfd)
+            if survivor_check is not None:
+                try:
+                    if not survivor_check():
+                        return False, path
+                except Exception:
+                    return False, path
+
+            final_state = {}
+
+            def validate_captured_file():
+                latest = os.fstat(fd)
+                latest_mtime = getattr(latest, "st_mtime_ns", latest.st_mtime)
+                again_mtime = getattr(again, "st_mtime_ns", again.st_mtime)
+                backup_changed = (
+                    latest.st_size != expected_size
+                    or latest_mtime != again_mtime
+                    or _hash_fd(fd) != expected_hash
+                )
+                survivor_ok = True
+                if survivor_check is not None:
+                    try:
+                        survivor_ok = bool(survivor_check())
+                    except Exception:
+                        survivor_ok = False
+                final_state["backup_changed"] = backup_changed
+                final_state["survivor_ok"] = survivor_ok
+                return not backup_changed and survivor_ok
+
+            try:
+                safepath._unlink_name_if_inode(
+                    name, dirfd, again, os.path.abspath(path),
+                    validate=validate_captured_file)
+            except OSError as exc:
+                detail = str(exc)
+                if final_state.get("backup_changed"):
+                    detail += "；备份内容在删除窗口发生变化，已保留"
+                if final_state.get("survivor_ok") is False:
+                    detail += "；目标副本在删除窗口发生变化，备份已保留"
+                return False, detail
             post = os.fstat(fd)
             pre_mtime = getattr(again, "st_mtime_ns", again.st_mtime)
             post_mtime = getattr(post, "st_mtime_ns", post.st_mtime)
@@ -344,12 +426,22 @@ def _verified_unlink(path: str, expected_size: int, expected_hash: str):
                 or post_mtime != pre_mtime
                 or _hash_fd(fd) != expected_hash
             )
-            if not swapped and not changed:
+            survivor_ok = True
+            if survivor_check is not None:
+                try:
+                    survivor_ok = bool(survivor_check())
+                except Exception:
+                    survivor_ok = False
+            if not swapped and not changed and survivor_ok:
                 return True, ""
-            recovered = _write_exclusive(path, _read_fd(fd)) if changed else ""
+            recovered = (_write_exclusive(path, _read_fd(fd))
+                         if changed or not survivor_ok else "")
             detail = recovered
             if swapped:
                 note = "删除后链接数不为 0，可能删到了别的目录项"
+                detail = (detail + "；" + note) if detail else note
+            if not survivor_ok:
+                note = "目标副本在删除核验期间发生变化，备份已保留"
                 detail = (detail + "；" + note) if detail else note
             return False, detail or path
         finally:
@@ -358,7 +450,8 @@ def _verified_unlink(path: str, expected_size: int, expected_hash: str):
         os.close(dirfd)
 
 
-def _verified_unlink_windows(path: str, expected_size: int, expected_hash: str) -> bool:
+def _verified_unlink_windows(path: str, expected_size: int, expected_hash: str,
+                             survivor_check=None) -> bool:
     """不共享写权限地打开，核对句柄后用 FILE_DISPOSITION_INFO 删除。"""
     import ctypes
     from ctypes import wintypes
@@ -447,6 +540,12 @@ def _verified_unlink_windows(path: str, expected_size: int, expected_hash: str) 
         if (attributes2 & safepath.FILE_ATTRIBUTE_REPARSE_POINT
                 or volume2 != volume or file_id2 != file_id or size2 != expected_size):
             return False
+        if survivor_check is not None:
+            try:
+                if not survivor_check():
+                    return False
+            except Exception:
+                return False
         mark = _Disposition(True)
         if not kernel.SetFileInformationByHandle(handle, 4, ctypes.byref(mark), ctypes.sizeof(mark)):
             return False
@@ -512,12 +611,18 @@ def _list_remaining(root: str):
     return found
 
 
-def _release_manifest(backup: str, manifest: dict):
+def _release_manifest(backup: str, manifest: dict, survivor=None):
     """只删除清单里、且句柄核对通过的文件。其余留下。"""
     notes = []
     for rel, mark in (manifest or {}).items():
         size, _mtime, digest = mark
-        clean, detail = _verified_unlink(os.path.join(backup, rel), size, digest)
+        survivor_check = None
+        if survivor:
+            survivor_path = os.path.join(survivor, rel)
+            expected = (size, digest)
+            survivor_check = lambda p=survivor_path, e=expected: _fingerprint(p) == e
+        clean, detail = _verified_unlink(
+            os.path.join(backup, rel), size, digest, survivor_check=survivor_check)
         if not clean and detail:
             notes.append(detail)
     if os.path.isdir(backup) and not os.path.islink(backup):
@@ -562,13 +667,33 @@ def _drop_covered(root: str, survivor: str):
     for rel, (size, mtime, digest) in manifest.items():
         if have.get(rel) == (size, digest):
             covered[rel] = (size, mtime, digest)
-    return _release_manifest(root, covered)
+    return _release_manifest(root, covered, survivor=survivor)
 
 
 def _unlink_link_only(path: str) -> bool:
     """只在目录项仍是符号链接时删除链接本身。"""
     parent = os.path.dirname(path) or "."
     name = os.path.basename(path)
+    if os.name != "nt":
+        try:
+            dirfd = _open_parent_dirfd(parent)
+        except OSError:
+            return False
+        try:
+            try:
+                info = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
+            except OSError:
+                return False
+            if not stat.S_ISLNK(info.st_mode):
+                return False
+            try:
+                safepath._unlink_name_if_inode(
+                    name, dirfd, info, os.path.abspath(path), expected_kind="symlink")
+                return True
+            except OSError:
+                return False
+        finally:
+            os.close(dirfd)
     try:
         dirfd = _open_parent_dirfd(parent)
     except OSError:

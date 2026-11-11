@@ -4,6 +4,7 @@ Windows 盘符路径在 Linux 上不能交给 os.path.abspath（会被拼到当�
 这里对「盘符:」开头的路径按 Windows 规则规范化，其余路径仍走本机绝对路径。
 """
 import os
+import secrets
 import stat
 import sys
 
@@ -280,6 +281,136 @@ def _parents_are_plain(path: str, allowed) -> bool:
     return True
 
 
+class UnsafeUnlinkError(OSError):
+    """目录项已变化或无法安全恢复；调用方不得把它当成普通占用文件。"""
+
+
+def _same_inode(left, right):
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _unlink_name_if_inode(name: str, dirfd: int, expected, path="", validate=None,
+                          expected_kind="regular"):
+    """原子捕获目录项，核对 inode 后删除；不匹配时尽力无覆盖地放回。"""
+    for _ in range(32):
+        quarantine = ".c-drive-cleaner-delete-" + secrets.token_hex(12)
+        try:
+            os.mkdir(quarantine, 0o700, dir_fd=dirfd)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise UnsafeUnlinkError("无法创建安全删除隔离目录")
+
+    quarantine_fd = None
+    entry = "captured"
+    base = os.path.dirname(path) if path else ""
+    quarantine_path = (os.path.join(base, quarantine, entry) if base
+                       else os.path.join(quarantine, entry))
+    try:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            flags |= os.O_DIRECTORY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        quarantine_fd = os.open(quarantine, flags, dir_fd=dirfd)
+        try:
+            os.rename(name, entry, src_dir_fd=dirfd, dst_dir_fd=quarantine_fd)
+        except FileNotFoundError as exc:
+            raise UnsafeUnlinkError(f"目录项已变化，未删除：{path or name}") from exc
+        moved = os.stat(entry, dir_fd=quarantine_fd, follow_symlinks=False)
+        expected_type = (stat.S_ISLNK(moved.st_mode) if expected_kind == "symlink"
+                         else stat.S_ISREG(moved.st_mode))
+        if expected_type and _same_inode(moved, expected):
+            if validate is None:
+                try:
+                    os.unlink(entry, dir_fd=quarantine_fd)
+                except OSError as exc:
+                    raise UnsafeUnlinkError(
+                        f"文件已安全隔离但未删除：{quarantine_path}") from exc
+                return
+            guard = "guard"
+            try:
+                os.link(entry, guard, src_dir_fd=quarantine_fd,
+                        dst_dir_fd=quarantine_fd, follow_symlinks=False)
+            except OSError as exc:
+                raise UnsafeUnlinkError(
+                    f"无法建立删除保护，备份保留在 {quarantine_path}") from exc
+            try:
+                os.unlink(entry, dir_fd=quarantine_fd)
+            except OSError as exc:
+                try:
+                    os.link(guard, name, src_dir_fd=quarantine_fd,
+                            dst_dir_fd=dirfd, follow_symlinks=False)
+                except OSError:
+                    raise UnsafeUnlinkError(
+                        f"删除失败，文件保留在 {quarantine_path}") from exc
+                raise UnsafeUnlinkError(
+                    f"删除失败，文件已还原：{path or name}") from exc
+            try:
+                keep = bool(validate())
+            except Exception:
+                keep = False
+            if not keep:
+                try:
+                    os.link(guard, name, src_dir_fd=quarantine_fd,
+                            dst_dir_fd=dirfd, follow_symlinks=False)
+                except OSError as exc:
+                    raise UnsafeUnlinkError(
+                        f"校验失败，文件保留在 {quarantine_path}") from exc
+                try:
+                    os.unlink(guard, dir_fd=quarantine_fd)
+                except OSError:
+                    pass
+                raise UnsafeUnlinkError(f"删除后校验失败，文件已还原：{path or name}")
+            try:
+                os.unlink(guard, dir_fd=quarantine_fd)
+            except OSError as exc:
+                try:
+                    os.link(guard, name, src_dir_fd=quarantine_fd,
+                            dst_dir_fd=dirfd, follow_symlinks=False)
+                except OSError:
+                    raise UnsafeUnlinkError(
+                        f"删除保护无法清理，文件保留在 {quarantine_path}") from exc
+                raise UnsafeUnlinkError(
+                    f"删除保护无法清理，文件已还原：{path or name}") from exc
+            return
+
+        # The name was exchanged after it was opened. Restore the captured
+        # entry without replacing anything that may now occupy the original name.
+        try:
+            os.link(entry, name, src_dir_fd=quarantine_fd, dst_dir_fd=dirfd,
+                    follow_symlinks=False)
+        except OSError as exc:
+            raise UnsafeUnlinkError(
+                f"目录项已变化，未删除；已保留在 {quarantine_path}") from exc
+        try:
+            staged = os.stat(entry, dir_fd=quarantine_fd, follow_symlinks=False)
+            restored = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
+        except OSError as exc:
+            raise UnsafeUnlinkError(
+                f"目录项已变化，未删除；已保留在 {quarantine_path}") from exc
+        if not _same_inode(staged, moved) or not _same_inode(restored, moved):
+            raise UnsafeUnlinkError(
+                f"目录项已变化，未删除；已保留在 {quarantine_path}")
+        try:
+            os.unlink(entry, dir_fd=quarantine_fd)
+        except OSError as exc:
+            raise UnsafeUnlinkError(
+                f"目录项已变化，原项已恢复；隔离副本仍在 {quarantine_path}") from exc
+        raise UnsafeUnlinkError(f"目录项已变化，未删除：{path or name}")
+    finally:
+        if quarantine_fd is not None:
+            os.close(quarantine_fd)
+        try:
+            os.rmdir(quarantine, dir_fd=dirfd)
+        except OSError:
+            # If safe restoration was impossible, retain the captured entry.
+            pass
+
+
 def unlink_regular(path: str, allowed=()):
     """确认不是链接后删除。逐级 O_NOFOLLOW 打开，避免父目录在检查后被换成链接。"""
     if not _parents_are_plain(path, allowed):
@@ -318,11 +449,11 @@ def unlink_regular(path: str, allowed=()):
             file_info = os.fstat(fd)
             if not stat.S_ISREG(file_info.st_mode):
                 raise OSError("拒绝删除非普通文件")
+            if not _parents_are_plain(absolute, allowed):
+                raise OSError(f"拒绝删除链接路径：{absolute}")
+            _unlink_name_if_inode(name, dirfd, file_info, absolute)
         finally:
             os.close(fd)
-        if not _parents_are_plain(absolute, allowed):
-            raise OSError(f"拒绝删除链接路径：{absolute}")
-        os.unlink(name, dir_fd=dirfd)
     finally:
         os.close(dirfd)
 

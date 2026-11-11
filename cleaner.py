@@ -109,10 +109,19 @@ def _delete_file(path, allowed, patterns, result, untrusted=False):
             result.skipped += 1
             return
         safepath.unlink_regular(path, allowed)
+    except safepath.UnsafeUnlinkError as exc:
+        # Never schedule a path whose directory entry changed during deletion.
+        result.skipped += 1
+        result.errors.append(str(exc))
+        return
     except PermissionError:
         try:
             os.chmod(path, stat.S_IWRITE)
             safepath.unlink_regular(path, allowed)
+        except safepath.UnsafeUnlinkError as exc:
+            result.skipped += 1
+            result.errors.append(str(exc))
+            return
         except OSError:
             _mark_pending(path, size, result)
             return

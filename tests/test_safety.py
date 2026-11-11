@@ -1459,8 +1459,7 @@ class SixthReviewTests(unittest.TestCase):
                         shutil.copy2(sp, os.path.join(target, name))
                 return 1
 
-            real_remove = os.remove
-            real_open = os.open
+            real_unlink_name = safepath._unlink_name_if_inode
             planted = {"done": False}
 
             def plant():
@@ -1470,20 +1469,14 @@ class SixthReviewTests(unittest.TestCase):
                 with open(os.path.join(dest, "sneaky.txt"), "w", encoding="utf-8") as handle:
                     handle.write("sneaky-data")
 
-            def remove(path, *args, **kwargs):
-                if str(path).startswith(dest):
+            def hooked_unlink_name(name, dirfd, expected, path="", **kwargs):
+                if os.path.abspath(path).startswith(os.path.abspath(dest) + os.sep):
                     plant()
-                return real_remove(path, *args, **kwargs)
-
-            def hooked_open(path, flags, *args, **kwargs):
-                directory = bool(flags & getattr(os, "O_DIRECTORY", 0))
-                if not directory and os.path.basename(str(path)) == "a.txt":
-                    plant()
-                return real_open(path, flags, *args, **kwargs)
+                return real_unlink_name(name, dirfd, expected, path, **kwargs)
 
             with mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
-                    mock.patch("migrate.os.remove", side_effect=remove), \
-                    mock.patch("migrate.os.open", side_effect=hooked_open):
+                    mock.patch("migrate.safepath._unlink_name_if_inode",
+                               side_effect=hooked_unlink_name):
                 try:
                     result = migrate._rollback_to_source(src, dest)
                 except migrate.MigrateError as exc:
@@ -1615,18 +1608,19 @@ class SeventhReviewTests(unittest.TestCase):
             with open(src, "wb") as handle:
                 handle.write(b"0123456789")
             backup = src + ".migrate-bak"
-            real_unlink = os.unlink
+            real_unlink_name = safepath._unlink_name_if_inode
             did = {"n": 0}
 
-            def hooked_unlink(path, *args, **kwargs):
-                if os.path.basename(str(path)) == os.path.basename(backup) and not did["n"]:
+            def hooked_unlink_name(name, dirfd, expected, path="", **kwargs):
+                if os.path.abspath(path) == os.path.abspath(backup) and not did["n"]:
                     did["n"] = 1
                     with open(backup, "ab") as handle:
                         handle.write(b"APPENDED")
-                return real_unlink(path, *args, **kwargs)
+                return real_unlink_name(name, dirfd, expected, path, **kwargs)
 
             with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
-                    mock.patch("migrate.os.unlink", side_effect=hooked_unlink):
+                    mock.patch("migrate.safepath._unlink_name_if_inode",
+                               side_effect=hooked_unlink_name):
                 result = migrate.migrate_file(src, dest_root)
             preserved = b""
             for path in (backup, backup + ".migrate-recovered"):
@@ -1673,21 +1667,22 @@ class SeventhReviewTests(unittest.TestCase):
 
             backup = src.rstrip("\\/") + ".migrate-bak"
             target = os.path.join(backup, "keep.txt")
-            real_unlink = os.unlink
+            real_unlink_name = safepath._unlink_name_if_inode
             did = {"n": 0}
 
-            def hooked_unlink(path, *args, **kwargs):
-                if os.path.basename(str(path)) == "keep.txt" and not did["n"]:
+            def hooked_unlink_name(name, dirfd, expected, path="", **kwargs):
+                if os.path.abspath(path) == os.path.abspath(target) and not did["n"]:
                     did["n"] = 1
                     with open(target, "ab") as handle:
                         handle.write(b"APPENDED")
-                return real_unlink(path, *args, **kwargs)
+                return real_unlink_name(name, dirfd, expected, path, **kwargs)
 
             with mock.patch.object(migrate, "_drive_of", side_effect=self._drive(dest_root)), \
                     mock.patch.object(migrate, "_robocopy", side_effect=robocopy), \
                     mock.patch.object(migrate, "is_junction", return_value=False), \
                     mock.patch.object(migrate, "create_junction", side_effect=link), \
-                    mock.patch("migrate.os.unlink", side_effect=hooked_unlink):
+                    mock.patch("migrate.safepath._unlink_name_if_inode",
+                               side_effect=hooked_unlink_name):
                 result = migrate.migrate(src, dest_root)
             preserved = b""
             for path in (target, target + ".migrate-recovered"):
@@ -1702,6 +1697,193 @@ class SeventhReviewTests(unittest.TestCase):
             shutil.rmtree(src, ignore_errors=True)
             shutil.rmtree(dest_root, ignore_errors=True)
             shutil.rmtree(backup, ignore_errors=True)
+
+
+class SafetyRaceRegressionTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX dir-fd deletion path")
+    def test_cleaner_does_not_delete_leaf_replacement(self):
+        folder = tempfile.mkdtemp()
+        try:
+            allowed = os.path.join(folder, "allowed")
+            os.makedirs(allowed)
+            victim = os.path.join(allowed, "victim.txt")
+            replacement = os.path.join(allowed, "replacement.txt")
+            with open(victim, "wb") as handle:
+                handle.write(b"opened original")
+            with open(replacement, "wb") as handle:
+                handle.write(b"replacement data")
+
+            cat = type("C", (), {"key": "race", "name": "race"})()
+            result = cleaner.CleanResult(cat)
+            real_rename = os.rename
+            raced = {"done": False}
+
+            def swap_before_capture(src, dst, *args, **kwargs):
+                if (str(src) == "victim.txt" and kwargs.get("src_dir_fd") is not None
+                        and not raced["done"]):
+                    raced["done"] = True
+                    real_rename(victim, victim + ".opened-original")
+                    real_rename(replacement, victim)
+                return real_rename(src, dst, *args, **kwargs)
+
+            with mock.patch("safepath.os.rename", side_effect=swap_before_capture):
+                cleaner._delete_file(victim, [allowed], ("*",), result)
+
+            self.assertEqual(result.deleted, 0)
+            self.assertEqual(result.skipped, 1)
+            self.assertEqual(result.pending, 0)
+            with open(victim, "rb") as handle:
+                self.assertEqual(handle.read(), b"replacement data")
+            with open(victim + ".opened-original", "rb") as handle:
+                self.assertEqual(handle.read(), b"opened original")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    @unittest.skipIf(os.name == "nt", "POSIX dir-fd deletion path")
+    def test_rollback_link_delete_does_not_remove_replacement_file(self):
+        folder = tempfile.mkdtemp()
+        try:
+            target = os.path.join(folder, "target.txt")
+            link = os.path.join(folder, "link")
+            with open(target, "wb") as handle:
+                handle.write(b"target stays")
+            os.symlink(target, link)
+            real_rename = os.rename
+            raced = {"done": False}
+
+            def replace_link_before_capture(src, dst, *args, **kwargs):
+                if (str(src) == "link" and kwargs.get("src_dir_fd") is not None
+                        and not raced["done"]):
+                    raced["done"] = True
+                    real_rename(link, link + ".opened-link")
+                    with open(link, "wb") as handle:
+                        handle.write(b"replacement file")
+                return real_rename(src, dst, *args, **kwargs)
+
+            with mock.patch("migrate.os.rename", side_effect=replace_link_before_capture):
+                self.assertFalse(migrate._unlink_link_only(link))
+
+            with open(link, "rb") as handle:
+                self.assertEqual(handle.read(), b"replacement file")
+            self.assertTrue(os.path.islink(link + ".opened-link"))
+            with open(target, "rb") as handle:
+                self.assertEqual(handle.read(), b"target stays")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    @unittest.skipIf(os.name == "nt", "POSIX backup recovery path")
+    def test_drop_covered_rechecks_survivor_after_inventory_snapshot(self):
+        backup = tempfile.mkdtemp()
+        survivor = tempfile.mkdtemp()
+        try:
+            backup_file = os.path.join(backup, "data.bin")
+            survivor_file = os.path.join(survivor, "data.bin")
+            for path in (backup_file, survivor_file):
+                with open(path, "wb") as handle:
+                    handle.write(b"known-good")
+
+            real_inventory = migrate.file_inventory
+            changed = {"done": False}
+
+            def stale_snapshot_then_change(root):
+                inventory = real_inventory(root)
+                if os.path.abspath(root) == os.path.abspath(survivor) and not changed["done"]:
+                    changed["done"] = True
+                    with open(survivor_file, "wb") as handle:
+                        handle.write(b"changed after scan")
+                return inventory
+
+            with mock.patch.object(migrate, "file_inventory",
+                                   side_effect=stale_snapshot_then_change):
+                remaining = migrate._drop_covered(backup, survivor)
+
+            self.assertTrue(os.path.isfile(backup_file))
+            with open(backup_file, "rb") as handle:
+                self.assertEqual(handle.read(), b"known-good")
+            self.assertIn(backup_file, remaining)
+        finally:
+            shutil.rmtree(backup, ignore_errors=True)
+            shutil.rmtree(survivor, ignore_errors=True)
+
+    @unittest.skipIf(os.name == "nt", "POSIX backup recovery path")
+    def test_drop_covered_restores_backup_if_survivor_changes_during_delete(self):
+        backup = tempfile.mkdtemp()
+        survivor = tempfile.mkdtemp()
+        try:
+            backup_file = os.path.join(backup, "data.bin")
+            survivor_file = os.path.join(survivor, "data.bin")
+            for path in (backup_file, survivor_file):
+                with open(path, "wb") as handle:
+                    handle.write(b"known-good")
+
+            real_unlink_name = safepath._unlink_name_if_inode
+            changed = {"done": False}
+
+            def delete_then_change_survivor(name, dirfd, expected, path="", **kwargs):
+                result = real_unlink_name(name, dirfd, expected, path, **kwargs)
+                if os.path.abspath(path) == os.path.abspath(backup_file) and not changed["done"]:
+                    changed["done"] = True
+                    with open(survivor_file, "wb") as handle:
+                        handle.write(b"changed during deletion")
+                return result
+
+            with mock.patch("migrate.safepath._unlink_name_if_inode",
+                            side_effect=delete_then_change_survivor):
+                remaining = migrate._drop_covered(backup, survivor)
+
+            self.assertTrue(os.path.isfile(backup_file))
+            with open(backup_file, "rb") as handle:
+                self.assertEqual(handle.read(), b"known-good")
+            with open(survivor_file, "rb") as handle:
+                self.assertEqual(handle.read(), b"changed during deletion")
+            self.assertIn(backup_file, remaining)
+        finally:
+            shutil.rmtree(backup, ignore_errors=True)
+            shutil.rmtree(survivor, ignore_errors=True)
+
+    def test_write_exclusive_rejects_zero_and_incomplete_short_writes(self):
+        folder = tempfile.mkdtemp()
+        try:
+            payload = b"complete recovery payload"
+            path = os.path.join(folder, "recovered.bin")
+            with mock.patch("migrate.os.write", return_value=0):
+                self.assertEqual(migrate._write_exclusive(path, payload), "")
+            self.assertFalse(os.path.lexists(path))
+            self.assertFalse(os.path.lexists(path + ".migrate-recovered"))
+
+            real_write = os.write
+            calls = {"n": 0}
+
+            def partial_then_zero(fd, view):
+                calls["n"] += 1
+                if calls["n"] % 2:
+                    return real_write(fd, view[:min(3, len(view))])
+                return 0
+
+            with mock.patch("migrate.os.write", side_effect=partial_then_zero):
+                self.assertEqual(migrate._write_exclusive(path, payload), "")
+            self.assertFalse(os.path.lexists(path))
+            self.assertFalse(os.path.lexists(path + ".migrate-recovered"))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_write_exclusive_completes_valid_short_writes(self):
+        folder = tempfile.mkdtemp()
+        try:
+            path = os.path.join(folder, "recovered.bin")
+            payload = b"all short writes must finish"
+            real_write = os.write
+
+            def short_write(fd, view):
+                return real_write(fd, view[:min(2, len(view))])
+
+            with mock.patch("migrate.os.write", side_effect=short_write):
+                written_path = migrate._write_exclusive(path, payload)
+            self.assertEqual(written_path, path)
+            with open(path, "rb") as handle:
+                self.assertEqual(handle.read(), payload)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 class FragVizTests(unittest.TestCase):
