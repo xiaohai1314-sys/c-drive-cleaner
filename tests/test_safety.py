@@ -2413,10 +2413,13 @@ class ReportedRegressionTests(unittest.TestCase):
             send.assert_called_once_with([])
             self.assertTrue(os.path.isfile(path))
             result = app.queue.get_nowait()
+            self.assertEqual(result[0], "dup_verify")
+            result = app.queue.get_nowait()
             self.assertEqual(result[0], "recycled")
             self.assertEqual(result[2], 0)
             self.assertEqual(result[3], 1)
             self.assertIn(path, result[6])
+            self.assertEqual(result[7]["changed"], [path])
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
@@ -2615,3 +2618,46 @@ class ReportedRegressionTests(unittest.TestCase):
             }))
         app._show_warning_panel.assert_called_once()
         show_info.assert_not_called()
+
+
+def test_manual_keeper_override_moves_keep_badge():
+    import dupes
+    group = {"hash": "h1", "files": [r"E:\移入\资料.rar", r"E:\备份\资料.rar"],
+             "mtimes": {r"E:\移入\资料.rar": 20, r"E:\备份\资料.rar": 10}}
+    try:
+        assert dupes.pick_keeper(group) == r"E:\移入\资料.rar"
+        assert dupes.set_keeper(group, r"E:\备份\资料.rar")
+        assert dupes.pick_keeper(group) == r"E:\备份\资料.rar"
+        assert dupes.paths_to_delete([group], set(group["files"])) == [r"E:\移入\资料.rar"]
+        assert not dupes.set_keeper(group, r"C:\nope.rar")
+        dupes.set_keep_rule("newest")
+        assert dupes.pick_keeper(group) == r"E:\移入\资料.rar"
+    finally:
+        dupes.set_keep_rule("newest")
+
+
+def test_dup_toggle_keeper_swaps_to_other_copy():
+    import dupes
+    import main
+    group = {"hash": "h2", "files": [r"D:\a.exe", r"E:\a.exe"], "mtimes": {r"D:\a.exe": 2, r"E:\a.exe": 1}}
+    app = main.App.__new__(main.App)
+    app.dup_groups = [group]
+    app.dup_checked = {r"E:\a.exe"}
+    app.after = lambda _ms, fn: None
+    try:
+        main.App._toggle_dup_path(app, r"D:\a.exe", True)
+        assert dupes.pick_keeper(group) == r"E:\a.exe"
+        assert app.dup_checked == {r"D:\a.exe"}
+    finally:
+        dupes.set_keep_rule("newest")
+
+
+def test_recycle_failure_lines_group_by_reason():
+    import main
+    lines = main._recycle_failure_lines(
+        {"changed": [r"E:\x.bin"], "missing": [], "recycle": [r"D:\y.bin"]},
+        [r"E:\x.bin", r"D:\y.bin", r"F:\z.bin"])
+    text = "\n".join(lines)
+    assert "为安全已跳过：1 个" in text
+    assert "移入回收站失败" in text
+    assert "其他原因：1 个" in text and r"F:\z.bin" in text

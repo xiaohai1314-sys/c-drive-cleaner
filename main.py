@@ -99,6 +99,31 @@ def _shred_media_warning(media_types):
     return "\n\n" + "\n".join(lines) if lines else ""
 
 
+def _recycle_failure_lines(reasons, failed_paths=()):
+    """把未删除的文件按原因分组，告诉用户为什么没删。"""
+    labels = (
+        ("changed", "扫描后文件内容或属性变了，为安全已跳过"),
+        ("missing", "文件已不存在"),
+        ("recycle", "移入回收站失败（可能被占用或没有权限）"),
+    )
+    lines = []
+    listed = set()
+    for key, label in labels:
+        paths = list((reasons or {}).get(key) or [])
+        if not paths:
+            continue
+        lines.append(f"{label}：{len(paths)} 个")
+        lines.extend("  " + path for path in paths[:8])
+        if len(paths) > 8:
+            lines.append(f"  …另有 {len(paths) - 8} 个")
+        listed.update(paths)
+    rest = [path for path in failed_paths or [] if path not in listed]
+    if rest:
+        lines.append(f"其他原因：{len(rest)} 个")
+        lines.extend("  " + path for path in rest[:8])
+    return lines
+
+
 def _round_rect(canvas, x1, y1, x2, y2, r, **kwargs):
     points = [x1 + r, y1, x1 + r, y1, x2 - r, y1, x2 - r, y1, x2, y1,
               x2, y1 + r, x2, y1 + r, x2, y2 - r, x2, y2 - r, x2, y2,
@@ -1388,14 +1413,19 @@ class App(_TkRoot):
         known_sizes = {}
         failed = set()
         eligible = []
-        for path in paths:
+        reasons = {"missing": [], "changed": [], "recycle": []}
+        total = len(paths)
+        for index, path in enumerate(paths, 1):
             if not os.path.lexists(path):
                 failed.add(path)
+                reasons["missing"].append(path)
                 continue
             if expected_groups is not None:
+                self.queue.put(("dup_verify", index, total, path))
                 group = expected_groups.get(path)
                 if group is None or not dupes.verify_duplicate_candidate(path, group):
                     failed.add(path)
+                    reasons["changed"].append(path)
                     continue
             try:
                 known_sizes[path] = os.path.getsize(path)
@@ -1408,6 +1438,7 @@ class App(_TkRoot):
             failed.update(eligible)
         done = [path for path in eligible if path not in failed and not os.path.lexists(path)]
         failed.update(path for path in eligible if os.path.lexists(path))
+        reasons["recycle"] = [path for path in eligible if path in failed]
         freed = sum(known_sizes.get(path, 0) for path in done)
         self._write_clean_log([
             "开始清理", f"清理：{title}",
@@ -1415,7 +1446,7 @@ class App(_TkRoot):
         ])
         self._cleaning = False
         self.queue.put(("recycled", title, len(done), len(failed), freed,
-                        list(done), sorted(failed)))
+                        list(done), sorted(failed), reasons))
 
     # ---------- 页面：大文件搬家 ----------
     def _page_bigmove(self, parent):
@@ -1675,10 +1706,20 @@ class App(_TkRoot):
 
     def _toggle_dup_path(self, path, checked):
         for group in self.dup_groups:
-            if path in (group.get("files") or []) and path == dupes.pick_keeper(group):
+            files = list(group.get("files") or [])
+            if path not in files or path != dupes.pick_keeper(group):
+                continue
+            # 勾选保留项 = 想删这份：把「保留」挪到同组另一份（优先挑没勾的），这一组仍至少留一份。
+            others = [one for one in files if one != path]
+            if checked and others:
+                spare = next((one for one in others if one not in self.dup_checked), others[0])
+                dupes.set_keeper(group, spare)
+                self.dup_checked.discard(spare)
+                self.dup_checked.add(path)
+            else:
                 self.dup_checked.discard(path)
-                self.after(1, self._render_dup)
-                return
+            self.after(1, self._render_dup)
+            return
         if checked:
             self.dup_checked.add(path)
         else:
@@ -1742,7 +1783,7 @@ class App(_TkRoot):
         GreenButton(self.dup_head, "一键清理", self._delete_dup).pack(side="right")
         if getattr(self, "dup_sub", None):
             self.dup_sub.configure(
-                text=f"已勾选 {len(doomed)} 个重复文件，共 {utils.fmt_size(selected_size)}。每组至少保留一份。")
+                text=f"已勾选 {len(doomed)} 个重复文件，共 {utils.fmt_size(selected_size)}。每组至少保留一份，勾选标「保留」的那份可改留同组另一份。")
 
     def _delete_dup(self):
         if self._cleaning or self._dup_running:
@@ -2641,6 +2682,11 @@ class App(_TkRoot):
             self.big_checked.intersection_update(path for path, _size, _mtime in self.big_rows)
             self._render_big()
             self._update_sidebar_sizes()
+        elif kind == "dup_verify":
+            _, index, total, path = message
+            if getattr(self, "dup_sub", None):
+                self.dup_sub.configure(
+                    text=f"删除前逐个核对文件内容 {index}/{total}：{os.path.basename(path)}（大文件需要一会儿）")
         elif kind == "dup_progress":
             if self.jobs.accept("dup", message[1]):
                 self.dup_sub.configure(text=f"正在查找重复文件… 已发现 {message[2]} 组")
@@ -2687,7 +2733,14 @@ class App(_TkRoot):
             done_paths = set(message[5] if len(message) > 5 else [])
             self.big_checked.difference_update(done_paths)
             self.dup_checked.difference_update(done_paths)
-            messagebox.showinfo("完成", f"{_title}：已移入回收站 {done} 个，失败 {failed} 个，约 {utils.fmt_size(freed)}。")
+            reasons = message[7] if len(message) > 7 else {}
+            summary = f"{_title}：已移入回收站 {done} 个，约 {utils.fmt_size(freed)}。"
+            if failed:
+                details = _recycle_failure_lines(reasons, message[6] if len(message) > 6 else [])
+                self._show_warning_panel(f"{_title}未全部完成", summary + f"未删除 {failed} 个：",
+                                         "", details, [])
+            else:
+                messagebox.showinfo("完成", summary)
             if self.current_page == "big":
                 self.start_big_scan()
             elif self.current_page == "dup":

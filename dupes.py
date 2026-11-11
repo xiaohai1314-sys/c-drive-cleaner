@@ -121,12 +121,28 @@ KEEP_RULES = (
     ("shortest", "保留路径最短"),
 )
 _keep_rule = "newest"
+# 用户手动指定的保留项：组哈希 → 路径。切换规则时清空；路径已不在组里时自动失效。
+_keeper_overrides = {}
 
 
 def set_keep_rule(rule) -> None:
-    """切换每组保留哪一份。未知规则回到默认的「最新修改」。"""
+    """切换每组保留哪一份。未知规则回到默认的「最新修改」。手动指定的保留项一并清掉。"""
     global _keep_rule
     _keep_rule = rule if rule in {key for key, _label in KEEP_RULES} else "newest"
+    _keeper_overrides.clear()
+
+
+def set_keeper(group, path) -> bool:
+    """手动指定这一组保留哪份。路径不在组里时不改，返回 False。"""
+    key = (group or {}).get("hash")
+    if not key or path not in ((group or {}).get("files") or []):
+        return False
+    _keeper_overrides[key] = path
+    return True
+
+
+def clear_keepers() -> None:
+    _keeper_overrides.clear()
 
 
 def keep_rule() -> str:
@@ -142,6 +158,10 @@ def pick_keeper(group, rule=None) -> str:
     files = list(group.get("files") or [])
     if not files:
         return ""
+    if rule is None:
+        chosen = _keeper_overrides.get(group.get("hash"))
+        if chosen in files:
+            return chosen
     mtimes = group.get("mtimes") or {}
     rule = rule or _keep_rule
     if rule == "oldest":
