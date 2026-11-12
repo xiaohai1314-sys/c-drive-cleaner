@@ -47,10 +47,6 @@ def validate_url(url) -> str:
     return ""
 
 
-_CACHE_PARTS = {
-    "temp", "tmp", "cache", "caches", "log", "logs",
-    "code cache", "gpucache", "gpu cache", "htmlcache",
-}
 _LIBRARY_PARTS = {
     "documents", "desktop", "downloads", "my documents",
     "文档", "桌面", "下载",
@@ -58,7 +54,7 @@ _LIBRARY_PARTS = {
 
 
 def remote_target_allowed(path: str, environ=None) -> str:
-    """远程规则只能指向用户临时目录或 AppData 下的已知缓存。返回错误说明。"""
+    """远程规则只能指向用户临时目录或固定 catalog 中的目标目录。"""
     if not isinstance(path, str) or not path.strip():
         return "路径为空"
     if len(path) > 500 or any(ord(char) < 32 for char in path):
@@ -75,7 +71,7 @@ def remote_target_allowed(path: str, environ=None) -> str:
     if name in safepath.PASSWORD_FILENAMES or "login data" in name:
         return "远程规则不能删除浏览器密码库"
     if not safepath.under_remote_allowlist(path, environ):
-        return "远程规则只能指向用户临时目录或已知缓存目录"
+        return "远程规则只能指向用户临时目录或固定 catalog 中的目录"
     return ""
 
 
