@@ -1,10 +1,6 @@
-"""P3 专项：出厂规则不变量 + 执行门审计 + 加载器与安全逻辑补强。
-
-背景：rules.json 的条目一律以 untrusted 身份加载，执行时要过
-safepath.under_remote_allowlist。路径段名不在缓存词表里的规则会
-“能扫不能删”（静默跳过）。本文件把这条约束钉成测试：
-- P3 新增规则必须 100% 过门；
-- 存量过不了门的路径登记为已知集合，只许缩小，不许悄悄扩大。
+"""P3 专项：出厂规则不变量、执行门审计与加载器安全逻辑。
+rules.json 中的条目一律以 untrusted 身份加载；AppData 目标必须匹配
+与可远程更新规则分离的固定目录 catalog。混合缓存/日志目标不得静默删除。
 """
 import json
 import os
@@ -167,7 +163,8 @@ class P3RuleRegressionTests(unittest.TestCase):
 
     @staticmethod
     def _is_log_target(path):
-        return path.rstrip("\\/").replace("/", "\\").rsplit("\\", 1)[-1].casefold() in {"log", "logs"}
+        return any(part.casefold() in {"log", "logs"}
+                   for part in path.replace("/", "\\").split("\\") if part)
 
     def test_every_new_suffix_exclusion_matches_full_filename(self):
         for rule in self._new_rules():
@@ -204,21 +201,69 @@ class P3RuleRegressionTests(unittest.TestCase):
                              ["cover.PDF", "photo.JPG", "report.pdf"])
 
     def test_log_rules_are_separate_and_warn_before_selection(self):
-        rules = self._new_rules()
+        rules = _shipped()["categories"]
         marked = [item for item in rules if item.get("irreversible_log")]
-        self.assertEqual(len(marked), 311)
+        self.assertEqual(len(marked), 320)
         for item in rules:
             targets = self._targets(item)
             log_targets = [path for path in targets if self._is_log_target(path)]
             if log_targets:
                 self.assertEqual(len(log_targets), len(targets), item["key"])
                 self.assertTrue(item.get("irreversible_log"), item["key"])
+                self.assertTrue(item.get("requires_confirm"), item["key"])
+                self.assertIn("无法从回收站恢复", item.get("warning", ""), item["key"])
         for item in marked:
             self.assertTrue(item.get("requires_confirm"), item["key"])
             self.assertIn("无法从回收站恢复", item.get("warning", ""), item["key"])
+
+        for key in ("app_qqyinle", "app_xitongrizhiwenjian",
+                    "app_baofengxiuchang", "app_tengxunketang"):
+            item = next(rule for rule in rules if rule["key"] == key)
+            self.assertTrue(self._targets(item), key)
+            self.assertFalse(any(self._is_log_target(path)
+                                 for path in self._targets(item)), key)
+
+        self.assertTrue(self._is_log_target(r"%APPDATA%\Vendor\logs\component"))
+        self.assertTrue(self._is_log_target(r"%APPDATA%\Vendor\Log\component"))
+        self.assertFalse(self._is_log_target(r"%APPDATA%\Vendor\logs_backup\component"))
+        self.assertFalse(self._is_log_target(r"%APPDATA%\Vendor\logger\component"))
         tim = next(item for item in rules if item["key"] == "app_tim")
         self.assertTrue(any(path.endswith("\\Cache") for path in self._targets(tim)))
         self.assertFalse(any(self._is_log_target(path) for path in self._targets(tim)))
+
+    def test_appdata_allowlist_requires_exact_shipped_directories(self):
+        known = (
+            r"%APPDATA%\Tencent\QQMusic\Cache",
+            r"%APPDATA%\iSpeak\dump",
+            r"%APPDATA%\Opera Software\Opera Next\thumbnails",
+            r"%LOCALAPPDATA%\Google\Chrome\User Data\Default\Cache",
+        )
+        for path in known:
+            expanded = _expand(path)
+            self.assertTrue(safepath.under_remote_allowlist(expanded, FAKE_ENV), path)
+            self.assertTrue(safepath.under_remote_allowlist(path, {}), path)
+            self.assertEqual(ruleupdate.remote_target_allowed(path, FAKE_ENV), "", path)
+            descendant = expanded + r"\sample.tmp"
+            self.assertFalse(
+                safepath.execution_forbidden(descendant, untrusted=True, environ=FAKE_ENV),
+                path)
+
+        random_paths = (
+            r"%APPDATA%\DefinitelyNotInstalled\dumps",
+            r"%LOCALAPPDATA%\DefinitelyNotInstalled\thumbnails",
+            r"%APPDATA%\DefinitelyNotInstalled\logs",
+            r"%LOCALAPPDATA%\DefinitelyNotInstalled\Cache",
+            r"%LOCALAPPDATA%\Google\Chrome\User Data\Default\NotCache\dumps\data",
+            r"%APPDATA%\iSpeak\dump_backup",
+        )
+        for path in random_paths:
+            expanded = _expand(path)
+            self.assertFalse(safepath.under_remote_allowlist(expanded, FAKE_ENV), path)
+            self.assertFalse(safepath.under_remote_allowlist(path, {}), path)
+            self.assertTrue(ruleupdate.remote_target_allowed(path, FAKE_ENV), path)
+            self.assertTrue(
+                safepath.execution_forbidden(expanded, untrusted=True, environ=FAKE_ENV),
+                path)
 
     def test_log_card_name_warns_before_user_selects_it(self):
         app = main.App.__new__(main.App)

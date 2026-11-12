@@ -3,6 +3,8 @@
 Windows 盘符路径在 Linux 上不能交给 os.path.abspath（会被拼到当前目录）。
 这里对「盘符:」开头的路径按 Windows 规则规范化，其余路径仍走本机绝对路径。
 """
+import fnmatch
+import json
 import os
 import secrets
 import stat
@@ -153,32 +155,81 @@ def is_reparse_point(path: str) -> bool:
     return stat.S_ISLNK(info.st_mode)
 
 
-_REMOTE_CACHE_PARTS = {
-    "cache", "caches", "code cache", "gpucache", "gpu cache", "htmlcache",
-    "logs", "log",
-    # 各应用事实上的缓存/临时目录名（仍必须是完整的路径段，不含通配）：
-    # Mozilla 系 cache2/startupCache、Telegram/DingTalk media_cache、
-    # 着色器 GLCache/DXCache、npm/go/nuget 工具缓存、
-    # Adobe Media Cache、Office OfficeFileCache、网易云 webdata、Temp。
-    "cache2", "startupcache", "media_cache", "web cache", "glcache",
-    "dxcache", "npm-cache", "v3-cache", "go-build", "componentmodelcache",
-    "officefilecache", "media cache", "media cache files", "webdata",
-    "temp",
-    # 2026-11-12 毒霸规则移植（duba-rules-port）：解码后的毒霸规则库里
-    # 事实上的缓存/临时/日志/崩溃转储目录名。只加“完整路径段”仍成立
-    # 的名字；"webcache" 故意不加（测试钉死：它会放行任意应用的
-    # webcache 目录，见 test_p3_special）。
-    "appcache", "application cache", "cache_data", "cachefile",
-    "cachestorage", "cef_cache", "cefcache", "crashdumps", "diskcache",
-    "dump", "dumps", "iecache", "image_cache", "imagecache",
-    "imagescache", "imgcache", "inetcache", "roamcache", "shadercache",
-    "sohuvideocache", "tbs_cache", "thumbnail", "thumbnails", "tlog",
-    "transcoded files cache",
-}
+_REMOTE_APPDATA_ALLOWLIST_FILE = "appdata_path_allowlist.json"
+_REMOTE_APPDATA_CATALOG = None
 
 
 def _path_parts(path: str):
     return [part for part in str(path).replace("/", "\\").split("\\") if part]
+
+
+def _remote_appdata_catalog():
+    """只读加载与可远程更新 rules.json 分离的已知 AppData 目标目录。"""
+    global _REMOTE_APPDATA_CATALOG
+    if _REMOTE_APPDATA_CATALOG is not None:
+        return _REMOTE_APPDATA_CATALOG
+    catalog = {"LOCALAPPDATA": {}, "APPDATA": {}}
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        _REMOTE_APPDATA_ALLOWLIST_FILE)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        _REMOTE_APPDATA_CATALOG = catalog
+        return catalog
+    if not isinstance(data, dict) or data.get("version") != 1:
+        _REMOTE_APPDATA_CATALOG = catalog
+        return catalog
+    for raw in data.get("paths", []):
+        if not isinstance(raw, str):
+            continue
+        folded = raw.replace("/", "\\")
+        for key in catalog:
+            marker = f"%{key}%\\"
+            if not folded.casefold().startswith(marker.casefold()):
+                continue
+            parts = _path_parts(folded[len(marker):])
+            if not parts or any(char in parts[0] for char in "*?["):
+                continue
+            catalog[key].setdefault(parts[0].casefold(), []).append(tuple(parts[1:]))
+            break
+    _REMOTE_APPDATA_CATALOG = catalog
+    return catalog
+
+
+def _catalog_path_matches(path_parts, root_key):
+    """目标必须位于 catalog 的某条精确目录模板之下；* 仅匹配单一路径段。"""
+    if not path_parts:
+        return False
+    patterns = _remote_appdata_catalog().get(root_key, {}).get(
+        path_parts[0].casefold(), ())
+    for pattern in patterns:
+        if len(path_parts) < len(pattern) + 1:
+            continue
+        if all(fnmatch.fnmatchcase(value.casefold(), expected.casefold())
+               for value, expected in zip(path_parts[1:], pattern)):
+            return True
+    return False
+
+
+def _known_appdata_target(path: str, environ=None) -> bool:
+    """以独立模板目录匹配 AppData 路径，不以 cache/log/dump 等名称兜底。"""
+    raw = str(path or "").strip().replace("/", "\\")
+    env = environ if environ is not None else os.environ
+    for key in ("LOCALAPPDATA", "APPDATA"):
+        marker = f"%{key}%\\"
+        if raw.casefold().startswith(marker.casefold()):
+            relative = raw[len(marker):]
+            return _catalog_path_matches(_path_parts(relative), key)
+        root = env.get(key) or ""
+        if not root or not _within_root(raw, root):
+            continue
+        norm_root = normalize(root).lower().rstrip("\\/")
+        norm_path = normalize(raw).lower().rstrip("\\/")
+        relative = norm_path[len(norm_root):].lstrip("\\/")
+        if _catalog_path_matches(_path_parts(relative), key):
+            return True
+    return False
 
 
 def path_syntax_error(path: str) -> str:
@@ -220,8 +271,8 @@ def _within_root(path: str, root: str) -> bool:
     return target.startswith(base + "\\") or target.startswith(base + "/")
 
 
-def _remote_pattern_ok(path: str) -> bool:
-    """未展开时，只接受明确的临时目录或 AppData 下的缓存目录前缀。"""
+def _remote_pattern_ok(path: str, environ=None) -> bool:
+    """未展开时，只接受明确的临时目录或固定 catalog 中的 AppData 目标。"""
     folded = str(path).replace("/", "\\")
     low = folded.lower()
     if path_syntax_error(folded):
@@ -233,8 +284,7 @@ def _remote_pattern_ok(path: str) -> bool:
     if low == "%localappdata%\\temp" or low.startswith("%localappdata%\\temp\\"):
         return True
     if low.startswith("%localappdata%\\") or low.startswith("%appdata%\\"):
-        parts = [part.lower() for part in _path_parts(folded)]
-        return any(part in _REMOTE_CACHE_PARTS for part in parts)
+        return _known_appdata_target(folded, environ)
     return False
 
 
@@ -252,30 +302,23 @@ def _allow_roots(environ):
 
 
 def under_remote_allowlist(path: str, environ=None) -> bool:
-    """解析后的路径必须落在用户临时目录，或 Local/Roaming 下的已知缓存目录。"""
+    """远程目标限于用户临时目录或固定 catalog 中的 AppData 目录。"""
     if path_syntax_error(path):
         return False
     expanded = _expand_env(path, environ)
     if path_syntax_error(expanded):
         return False
-    # 变量没设时，只认明确的 %TEMP% / %LOCALAPPDATA%\\Temp / AppData 缓存写法。
+    # 变量没设时，仍要求 AppData 路径与固定 catalog 精确匹配。
     if "%" in expanded:
-        return _remote_pattern_ok(path) and _remote_pattern_ok(expanded)
+        return (_remote_pattern_ok(path, environ) and
+                _remote_pattern_ok(expanded, environ))
     normalized = normalize(expanded)
     if is_system_path(normalized) or is_user_library(normalized, environ):
         return False
     for root in _allow_roots(environ):
         if _within_root(normalized, root):
             return True
-    env = environ if environ is not None else os.environ
-    for key in ("LOCALAPPDATA", "APPDATA"):
-        base = env.get(key) or ""
-        if not base or not _within_root(normalized, base):
-            continue
-        parts = [part.lower() for part in _path_parts(normalize(normalized))]
-        if any(part in _REMOTE_CACHE_PARTS for part in parts):
-            return True
-    return False
+    return _known_appdata_target(normalized, environ)
 
 
 def execution_forbidden(path: str, untrusted=False, environ=None) -> bool:

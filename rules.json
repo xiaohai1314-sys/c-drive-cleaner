@@ -18,10 +18,8 @@
     "%USERPROFILE%\\Documents\\WeChat Files\\*\\FileStorage\\Cache",
     "%USERPROFILE%\\Documents\\xwechat_files\\*\\cache",
     "%USERPROFILE%\\Documents\\xwechat_files\\*\\temp",
-    "%APPDATA%\\Tencent\\xwechat\\log",
     "%APPDATA%\\Tencent\\xwechat\\crashinfo",
     "%APPDATA%\\Tencent\\xwechat\\update",
-    "%APPDATA%\\Tencent\\WeChat\\log",
     "%APPDATA%\\Tencent\\WeChat\\crash",
     "%APPDATA%\\Tencent\\WeChat\\cdncomm"
    ],
@@ -49,7 +47,6 @@
     "%APPDATA%\\Tencent\\QQ\\Cache",
     "%APPDATA%\\Tencent\\QQ\\Code Cache",
     "%APPDATA%\\Tencent\\QQ\\GPUCache",
-    "%APPDATA%\\Tencent\\QQ\\log",
     "%USERPROFILE%\\Documents\\Tencent Files\\*\\Cache"
    ],
    "prune_dirs": true,
@@ -144,9 +141,7 @@
    "describe": "钉钉的媒体缓存与日志",
    "glob_dirs": [
     "%APPDATA%\\DingTalk\\media_cache",
-    "%APPDATA%\\DingTalk\\log",
-    "%LOCALAPPDATA%\\DingTalk\\Cache",
-    "%LOCALAPPDATA%\\DingTalk\\logs"
+    "%LOCALAPPDATA%\\DingTalk\\Cache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -191,7 +186,6 @@
    "describe": "飞书的缓存与日志",
    "glob_dirs": [
     "%LOCALAPPDATA%\\Feishu\\cache",
-    "%LOCALAPPDATA%\\Feishu\\log",
     "%APPDATA%\\Feishu\\cache"
    ],
    "prune_dirs": true,
@@ -214,8 +208,7 @@
    "describe": "迅雷的下载缓存与日志",
    "glob_dirs": [
     "%APPDATA%\\Thunder Network\\Thunder\\Profiles\\*\\Cache",
-    "%LOCALAPPDATA%\\Thunder Network\\Thunder\\Cache",
-    "%LOCALAPPDATA%\\Thunder Network\\Thunder\\Logs"
+    "%LOCALAPPDATA%\\Thunder Network\\Thunder\\Cache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -259,8 +252,7 @@
    "describe": "QQ音乐的缓存与日志",
    "glob_dirs": [
     "%LOCALAPPDATA%\\Tencent\\QQMusic\\Cache",
-    "%APPDATA%\\Tencent\\QQMusic\\Cache",
-    "%LOCALAPPDATA%\\Tencent\\QQMusic\\Logs"
+    "%APPDATA%\\Tencent\\QQMusic\\Cache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -304,8 +296,7 @@
    "describe": "腾讯视频的播放缓存与日志",
    "glob_dirs": [
     "%APPDATA%\\Tencent\\QQLive\\Cache",
-    "%LOCALAPPDATA%\\Tencent\\QQLive\\Cache",
-    "%APPDATA%\\Tencent\\QQLive\\log"
+    "%LOCALAPPDATA%\\Tencent\\QQLive\\Cache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -326,8 +317,7 @@
    "kind": "files",
    "describe": "B 站的缓存与日志",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\bilibili\\Cache",
-    "%LOCALAPPDATA%\\bilibili\\log"
+    "%LOCALAPPDATA%\\bilibili\\Cache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -348,8 +338,7 @@
    "kind": "files",
    "describe": "剪映的缓存与日志",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\JianyingPro\\User Data\\Cache",
-    "%LOCALAPPDATA%\\JianyingPro\\logs"
+    "%LOCALAPPDATA%\\JianyingPro\\User Data\\Cache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -436,8 +425,7 @@
    "kind": "files",
    "describe": "Steam 的网页缓存与日志",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Steam\\htmlcache",
-    "%LOCALAPPDATA%\\Steam\\logs"
+    "%LOCALAPPDATA%\\Steam\\htmlcache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -459,7 +447,6 @@
    "describe": "Microsoft Teams 的缓存与日志",
    "glob_dirs": [
     "%APPDATA%\\Microsoft\\Teams\\Cache",
-    "%APPDATA%\\Microsoft\\Teams\\logs",
     "%APPDATA%\\Microsoft\\Teams\\Code Cache"
    ],
    "prune_dirs": true,
@@ -795,8 +782,7 @@
    "glob_dirs": [
     "%APPDATA%\\discord\\Cache",
     "%APPDATA%\\discord\\Code Cache",
-    "%APPDATA%\\discord\\GPUCache",
-    "%APPDATA%\\discord\\logs"
+    "%APPDATA%\\discord\\GPUCache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -819,8 +805,7 @@
    "glob_dirs": [
     "%APPDATA%\\Slack\\Cache",
     "%APPDATA%\\Slack\\Code Cache",
-    "%APPDATA%\\Slack\\GPUCache",
-    "%APPDATA%\\Slack\\logs"
+    "%APPDATA%\\Slack\\GPUCache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -853,7 +838,10 @@
     "*.pptx",
     "*.pdf",
     "*.dwg"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_skype",
@@ -906,8 +894,7 @@
    "kind": "files",
    "describe": "Signal Desktop 的网页缓存与日志",
    "glob_dirs": [
-    "%APPDATA%\\Signal\\Cache",
-    "%APPDATA%\\Signal\\logs"
+    "%APPDATA%\\Signal\\Cache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -999,8 +986,7 @@
    "glob_dirs": [
     "%APPDATA%\\Code\\Cache",
     "%APPDATA%\\Code\\Code Cache",
-    "%APPDATA%\\Code\\GPUCache",
-    "%APPDATA%\\Code\\logs"
+    "%APPDATA%\\Code\\GPUCache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -1023,8 +1009,7 @@
    "glob_dirs": [
     "%APPDATA%\\Code - Insiders\\Cache",
     "%APPDATA%\\Code - Insiders\\Code Cache",
-    "%APPDATA%\\Code - Insiders\\GPUCache",
-    "%APPDATA%\\Code - Insiders\\logs"
+    "%APPDATA%\\Code - Insiders\\GPUCache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -1047,8 +1032,7 @@
    "glob_dirs": [
     "%APPDATA%\\Cursor\\Cache",
     "%APPDATA%\\Cursor\\Code Cache",
-    "%APPDATA%\\Cursor\\GPUCache",
-    "%APPDATA%\\Cursor\\logs"
+    "%APPDATA%\\Cursor\\GPUCache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -1092,8 +1076,7 @@
    "kind": "files",
    "describe": "JetBrains 全家桶的索引缓存与日志",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\JetBrains\\*\\caches",
-    "%LOCALAPPDATA%\\JetBrains\\*\\log"
+    "%LOCALAPPDATA%\\JetBrains\\*\\caches"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -1114,8 +1097,7 @@
    "kind": "files",
    "describe": "Android Studio 的缓存与日志",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Google\\AndroidStudio*\\caches",
-    "%LOCALAPPDATA%\\Google\\AndroidStudio*\\log"
+    "%LOCALAPPDATA%\\Google\\AndroidStudio*\\caches"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -1296,7 +1278,10 @@
     "*.pptx",
     "*.pdf",
     "*.dwg"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_postman",
@@ -1397,8 +1382,7 @@
    "glob_dirs": [
     "%APPDATA%\\GitHub Desktop\\Cache",
     "%APPDATA%\\GitHub Desktop\\Code Cache",
-    "%APPDATA%\\GitHub Desktop\\GPUCache",
-    "%APPDATA%\\GitHub Desktop\\logs"
+    "%APPDATA%\\GitHub Desktop\\GPUCache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -1478,10 +1462,10 @@
   },
   {
    "key": "app_epic",
-   "name": "Epic 启动器缓存",
+   "name": "Epic 启动器日志",
    "tier": "standard",
    "kind": "files",
-   "describe": "Epic Games Launcher 的运行日志",
+   "describe": "Epic 启动器的运行日志目录",
    "glob_dirs": [
     "%LOCALAPPDATA%\\EpicGamesLauncher\\Saved\\Logs"
    ],
@@ -1495,7 +1479,10 @@
     "*.pptx",
     "*.pdf",
     "*.dwg"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_origin",
@@ -1546,8 +1533,7 @@
    "kind": "files",
    "describe": "Battle.net 的网页缓存与日志",
    "glob_dirs": [
-    "%LOCALAPPDATA%\\Battle.net\\Cache",
-    "%LOCALAPPDATA%\\Battle.net\\Logs"
+    "%LOCALAPPDATA%\\Battle.net\\Cache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -1580,7 +1566,10 @@
     "*.pptx",
     "*.pdf",
     "*.dwg"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_itch",
@@ -1624,7 +1613,10 @@
     "*.pptx",
     "*.pdf",
     "*.dwg"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_handbrake",
@@ -1645,7 +1637,10 @@
     "*.pptx",
     "*.pdf",
     "*.dwg"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_capcut",
@@ -1973,8 +1968,7 @@
    "kind": "files",
    "describe": "WPS 的缓存与日志（不含文档备份目录）",
    "glob_dirs": [
-    "%APPDATA%\\Kingsoft\\office6\\cache",
-    "%APPDATA%\\Kingsoft\\office6\\log"
+    "%APPDATA%\\Kingsoft\\office6\\cache"
    ],
    "prune_dirs": true,
    "exclude": [
@@ -2070,7 +2064,10 @@
     "*.pptx",
     "*.pdf",
     "*.dwg"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_todesk",
@@ -2091,7 +2088,10 @@
     "*.pptx",
     "*.pdf",
     "*.dwg"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_nvidia_shader",
@@ -24339,12 +24339,9 @@
    "desc": "QQ音乐 的缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%APPDATA%\\Tencent\\QQMusic\\Cache\\Log\\QQMusic",
     "%APPDATA%\\Tencent\\QQMusic\\Cache\\WhirlCache",
     "%APPDATA%\\Tencent\\QQMusic\\Cache\\musiccache",
-    "%APPDATA%\\Tencent\\QQMusic\\Temp",
-    "%APPDATA%\\tencent\\qqmusic\\QQMusicCache\\Log\\QQMusic",
-    "%APPDATA%\\tencent\\qqmusic\\qqmusiccache\\log\\memroylog"
+    "%APPDATA%\\Tencent\\QQMusic\\Temp"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -27753,7 +27750,6 @@
     "%APPDATA%\\4366\\血饮龙纹\\cache",
     "%APPDATA%\\51airclass\\cache",
     "%APPDATA%\\818ps_client\\cache\\cache_data",
-    "%APPDATA%\\91pop\\logs\\demob\\ddm",
     "%APPDATA%\\9377\\9377《白蛇传奇》\\cache\\cache",
     "%APPDATA%\\996box\\cefcache\\cache",
     "%APPDATA%\\996传奇盒子\\cache",
@@ -27771,7 +27767,6 @@
     "%APPDATA%\\bohegame\\cache",
     "%APPDATA%\\boss\\cache",
     "%APPDATA%\\btgamemanager\\partitions\\webgame\\cache",
-    "%APPDATA%\\cc\\logs\\playersdk",
     "%APPDATA%\\chuangkit-desktop\\service worker\\cachestorage",
     "%APPDATA%\\chuangzheng\\cache\\cache",
     "%APPDATA%\\clash_win\\cache",
@@ -27783,7 +27778,6 @@
     "%APPDATA%\\competition-client\\cache",
     "%APPDATA%\\corplink\\cache",
     "%APPDATA%\\couponmaster\\cef_cache",
-    "%APPDATA%\\cxketang\\logs\\agora",
     "%APPDATA%\\daidaidj-ele\\cache",
     "%APPDATA%\\ddmcworkbench\\cache",
     "%APPDATA%\\deepl_se\\cache\\cache",
@@ -27830,14 +27824,12 @@
     "%APPDATA%\\jdyclient\\cache",
     "%APPDATA%\\jlc-assistant\\cache\\cache_data",
     "%APPDATA%\\kangnote\\missent\\cache\\cache",
-    "%APPDATA%\\kingsoft\\office6\\log\\setup",
     "%APPDATA%\\larkshell-ka-greentown\\cache",
     "%APPDATA%\\larkshell-ka-md_zht\\iron\\cache",
     "%APPDATA%\\lastos\\cache\\cache_data",
     "%APPDATA%\\lemonclient(acc)\\cache",
     "%APPDATA%\\lexuedfdata\\cache\\cache",
     "%APPDATA%\\leyougamebox\\cef_cache",
-    "%APPDATA%\\liteav\\log\\小鹅通助手",
     "%APPDATA%\\meikedata\\cache\\174324\\cache",
     "%APPDATA%\\metis-pgqjywyh-student\\partitions\\student\\cache\\cache_data",
     "%APPDATA%\\microsoft\\teams\\cache\\cache_data",
@@ -27852,7 +27844,6 @@
     "%APPDATA%\\paopao\\cache",
     "%APPDATA%\\pc-client\\cache",
     "%APPDATA%\\pc-now-studio-v2\\cache",
-    "%APPDATA%\\pcsuite\\log\\service_log",
     "%APPDATA%\\pd launcher\\epic\\cache\\prod\\cache",
     "%APPDATA%\\peafsearchdata\\cef_cache",
     "%APPDATA%\\peppa-app-pc-student\\cache",
@@ -27889,8 +27880,6 @@
     "%APPDATA%\\tdappdesktop\\users\\guest\\cache",
     "%APPDATA%\\telegram desktop\\tdata\\user_data\\cache\\0",
     "%APPDATA%\\tencent\\androws\\wmpf\\web\\profiles\\web_shell\\cache",
-    "%APPDATA%\\tencent\\baowupc\\log\\saas_service",
-    "%APPDATA%\\tencent\\logs\\perf",
     "%APPDATA%\\tencent\\qqpcmgr\\radium\\web\\profiles\\web_shell\\cache",
     "%APPDATA%\\tencent\\start\\cache",
     "%APPDATA%\\tencent\\txgameassistant\\radium\\web\\profiles\\web_shell\\cache",
@@ -27899,7 +27888,6 @@
     "%APPDATA%\\tencent\\wechat\\radium\\web\\profiles\\multitab\\service worker\\cachestorage",
     "%APPDATA%\\tencent\\wechat\\radium\\web\\profiles\\web_shell\\cache",
     "%APPDATA%\\tencent\\wechat\\temp",
-    "%APPDATA%\\tencent\\weiyunapp\\log\\weiyunapp",
     "%APPDATA%\\tencent\\wemail\\cefcache\\cache",
     "%APPDATA%\\tencent\\wemeet\\global\\webkitcache\\cache",
     "%APPDATA%\\testclient\\cache",
@@ -27960,10 +27948,6 @@
     "%LOCALAPPDATA%\\avirawebview2cache\\ebwebview\\default\\cache",
     "%LOCALAPPDATA%\\b5csgo\\dump",
     "%LOCALAPPDATA%\\bililive\\user data\\browser cache 3770\\cache",
-    "%LOCALAPPDATA%\\bjhl\\logs\\fe\\gaotu",
-    "%LOCALAPPDATA%\\bjhl\\logs\\ping\\gsxclient_ping",
-    "%LOCALAPPDATA%\\bjhl\\logs\\ppapi-video\\gaotu",
-    "%LOCALAPPDATA%\\bjhl\\logs\\xstream\\gaotu",
     "%LOCALAPPDATA%\\boxbrowser_new\\browsercache\\cache",
     "%LOCALAPPDATA%\\bypassruntm\\webview2cahce\\ebwebview\\default\\cache",
     "%LOCALAPPDATA%\\cboxservice\\cache\\qtwebengine\\default\\cache",
@@ -28051,9 +28035,7 @@
     "%LOCALAPPDATA%\\qiyou\\cefcache\\cache",
     "%LOCALAPPDATA%\\qqyx\\htmlcache",
     "%LOCALAPPDATA%\\razer\\razer cortex\\uicache\\10.7.7.0\\ebwebview\\default\\cache",
-    "%LOCALAPPDATA%\\riot games\\riot client\\logs\\agent",
     "%LOCALAPPDATA%\\roblox\\universalapp\\webview2\\ebwebview\\default\\cache",
-    "%LOCALAPPDATA%\\sap\\sap business one\\log\\diapi",
     "%LOCALAPPDATA%\\sdwallpaper\\cache\\cache",
     "%LOCALAPPDATA%\\softmgr\\cache",
     "%LOCALAPPDATA%\\software\\sysoptasst\\ascommon\\cef_cache",
@@ -28065,9 +28047,7 @@
     "%LOCALAPPDATA%\\uclient\\temp\\cef_cache",
     "%LOCALAPPDATA%\\upweb\\upgpt\\cache\\gpucache",
     "%LOCALAPPDATA%\\vipclass\\cache\\qtwebengine\\default\\cache",
-    "%LOCALAPPDATA%\\virtualstore\\programdata\\supportassist\\client\\agent\\logs\\applicationlogs",
     "%LOCALAPPDATA%\\waimai_e_pc_client\\user data\\default\\cache",
-    "%LOCALAPPDATA%\\wooduan\\log\\official",
     "%LOCALAPPDATA%\\xesstudent\\cache\\qtwebengine\\xes\\cache",
     "%LOCALAPPDATA%\\xesstudent_literacy\\cache\\qtwebengine\\xes\\cache",
     "%LOCALAPPDATA%\\xesstudent_subject\\cache\\qtwebengine\\xes\\cache",
@@ -28076,7 +28056,6 @@
     "%LOCALAPPDATA%\\xywinqt\\cache\\qtwebengine\\default\\cache",
     "%LOCALAPPDATA%\\xzdesktop\\xzsearch\\htmllocalstorage\\cache",
     "%LOCALAPPDATA%\\yodao\\deskdict\\dict.cache\\cache\\cache_data",
-    "%LOCALAPPDATA%\\znyd\\log\\box",
     "%LOCALAPPDATA%\\zuoyebang\\livestudent\\cefcachewin7\\cache",
     "%LOCALAPPDATA%\\中央网络电视台\\cbox\\cache\\qtwebengine\\default\\cache",
     "%LOCALAPPDATA%\\原神\\cache\\qtwebengine\\default\\cache",
@@ -29934,8 +29913,8 @@
   },
   {
    "key": "app_adobeillustrator",
-   "name": "Adobe Illustrator 缓存",
-   "desc": "Adobe Illustrator 的缓存",
+   "name": "Adobe Illustrator 日志",
+   "desc": "Adobe Illustrator 的运行日志目录",
    "tier": "standard",
    "glob_dirs": [
     "%APPDATA%\\Adobe\\Logs\\Adobe Illustrator"
@@ -29964,7 +29943,10 @@
     ".zip",
     ".rar",
     ".7z"
-   ]
+   ],
+   "irreversible_log": true,
+   "requires_confirm": true,
+   "warning": "日志将被永久删除，无法从回收站恢复；其中可能含有诊断信息，请确认确实不再需要。"
   },
   {
    "key": "app_xiaomishoujizhushou",
@@ -33007,9 +32989,7 @@
    "desc": "暴风秀场 的缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%APPDATA%\\FengXiu\\BaoFengShow\\ImgCache",
-    "%APPDATA%\\FengXiu\\BaoFengShow\\Log\\Unity",
-    "%APPDATA%\\FengXiu\\Log\\LivePlay"
+    "%APPDATA%\\FengXiu\\BaoFengShow\\ImgCache"
    ],
    "prune_dirs": true,
    "min_age_minutes": 60,
@@ -36042,7 +36022,6 @@
    "desc": "腾讯课堂 的缓存",
    "tier": "standard",
    "glob_dirs": [
-    "%APPDATA%\\Tencent\\Logs\\TXEdu",
     "%APPDATA%\\Tencent\\TXEdu\\cefCache\\Cache"
    ],
    "prune_dirs": true,
