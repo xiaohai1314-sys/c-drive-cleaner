@@ -106,7 +106,7 @@ class ShippedRulesTests(unittest.TestCase):
     def test_count_and_unique_keys(self):
         data = _shipped()
         cats = data["categories"]
-        self.assertGreaterEqual(len(cats), 600)
+        self.assertGreaterEqual(len(cats), 1074)
         keys = [c["key"] for c in cats]
         self.assertEqual(len(keys), len(set(keys)))
 
@@ -206,7 +206,7 @@ class P3RuleRegressionTests(unittest.TestCase):
     def test_log_rules_are_separate_and_warn_before_selection(self):
         rules = self._new_rules()
         marked = [item for item in rules if item.get("irreversible_log")]
-        self.assertEqual(len(marked), 198)
+        self.assertEqual(len(marked), 311)
         for item in rules:
             targets = self._targets(item)
             log_targets = [path for path in targets if self._is_log_target(path)]

@@ -164,6 +164,16 @@ _REMOTE_CACHE_PARTS = {
     "dxcache", "npm-cache", "v3-cache", "go-build", "componentmodelcache",
     "officefilecache", "media cache", "media cache files", "webdata",
     "temp",
+    # 2026-11-12 毒霸规则移植（duba-rules-port）：解码后的毒霸规则库里
+    # 事实上的缓存/临时/日志/崩溃转储目录名。只加“完整路径段”仍成立
+    # 的名字；"webcache" 故意不加（测试钉死：它会放行任意应用的
+    # webcache 目录，见 test_p3_special）。
+    "appcache", "application cache", "cache_data", "cachefile",
+    "cachestorage", "cef_cache", "cefcache", "crashdumps", "diskcache",
+    "dump", "dumps", "iecache", "image_cache", "imagecache",
+    "imagescache", "imgcache", "inetcache", "roamcache", "shadercache",
+    "sohuvideocache", "tbs_cache", "thumbnail", "thumbnails", "tlog",
+    "transcoded files cache",
 }
 
 
