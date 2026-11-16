@@ -11,7 +11,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # numpy 只是被 Pillow 的可选路径引用，程序运行时用不到；打进来会让 exe 多十几 MB，
+    # 单文件每次启动都要解压它。
+    excludes=['numpy'],
     noarchive=False,
     optimize=0,
 )

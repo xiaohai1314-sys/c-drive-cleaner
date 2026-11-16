@@ -211,7 +211,7 @@ class App(_TkRoot):
         self.configure(bg=BG)
         self.option_add("*Font", look.tk_font(10))
 
-        self.categories = categories.get_categories()
+        self.categories = categories.get_builtin_categories()
         self.selected = {c.key for c in self.categories
                          if c.tier == categories.CONSERVATIVE}
         self.results = {}
@@ -246,6 +246,7 @@ class App(_TkRoot):
         self._stray_scan_running = False
         self._im_running = {"wechat": False, "qq": False}
         self._frag_running = False
+        self._scan_ui_job = None
         self.jobs = scanjobs.ScanJobs()
         self.scan_complete = False
         self._screenshot = os.environ.get("CLEANER_SCREENSHOT") == "1"
@@ -288,7 +289,7 @@ class App(_TkRoot):
             self.scan_complete = True
             self.after(250, self._load_screenshot_demo)
         else:
-            self.after(200, self.start_scan)
+            self.after(60, self._load_external_categories)
 
     # ---------- 样式 ----------
     def _build_style(self):
@@ -362,7 +363,7 @@ class App(_TkRoot):
 
     # ---------- 页面容器 ----------
     def _build_pages(self):
-        builders = {
+        self._page_builders = {
             "clean": self._page_clean,
             "frag": self._page_frag,
             "privacy": self._page_privacy,
@@ -374,32 +375,65 @@ class App(_TkRoot):
             "migrate": self._page_migrate,
             "bigmove": self._page_bigmove,
         }
-        for key, builder in builders.items():
-            frame = tk.Frame(self.content, bg=WHITE)
-            builder(frame)
-            self.pages[key] = frame
+        self._ensure_page("clean")
+        if self._screenshot:
+            # 截图/演示模式没有后台加载，规则同步展开，保证页面和正式运行一致。
+            known = {c.key for c in self.categories}
+            self.categories.extend(categories.get_external_categories(known))
+            self.selected.update(c.key for c in self.categories
+                                 if c.tier == categories.CONSERVATIVE)
+            for key in self._page_builders:
+                self._ensure_page(key)
+
+    def _ensure_page(self, key):
+        """页面第一次打开时才构建，启动时只建首页，省掉其它页面的控件开销。"""
+        frame = self.pages.get(key)
+        if frame is not None:
+            return frame
+        builder = getattr(self, "_page_builders", {}).get(key)
+        if builder is None:
+            return None
+        frame = tk.Frame(self.content, bg=WHITE)
+        builder(frame)
+        self.pages[key] = frame
+        return frame
 
     def _show_page(self, key):
-        for name, frame in self.pages.items():
+        frame = self._ensure_page(key)
+        if frame is None:
+            return
+        for name, page in self.pages.items():
             if name == key:
-                frame.pack(fill="both", expand=True)
+                page.pack(fill="both", expand=True)
             else:
-                frame.pack_forget()
+                page.pack_forget()
         for name, item in self.sidebar_items.items():
             item.set_selected(name == key)
         self.current_page = key
         if self._screenshot:
             return
-        if key == "big" and not self.big_rows:
-            self.start_big_scan()
-        if key == "dup" and not self.dup_groups:
-            self.start_dup_scan()
+        if key == "big":
+            if self.big_rows:
+                self._render_big()
+            else:
+                self.start_big_scan()
+        if key == "dup":
+            if self.dup_groups:
+                self._render_dup()
+            else:
+                self.start_dup_scan()
         if key == "frag":
             self._update_frag_stats()
-        if key == "migrate" and not self.mig_rows:
-            self.start_migrate_scan()
-        if key == "bigmove" and not self.bigmove_rows:
-            self.start_bigmove_scan()
+        if key == "migrate":
+            if self.mig_rows:
+                self._render_mig(self.mig_rows)
+            else:
+                self.start_migrate_scan()
+        if key == "bigmove":
+            if self.bigmove_rows:
+                self._render_bigmove(keep_checked=True)
+            else:
+                self.start_bigmove_scan()
         if key == "wechat" and self.im_scan.get("wechat") is None:
             self._scan_im("wechat")
         if key == "qq" and self.im_scan.get("qq") is None:
@@ -1258,7 +1292,7 @@ class App(_TkRoot):
         menu = tk.Menu(self, tearoff=0)
         menu.add_command(label="打开文件", command=lambda: self._open_file(path))
         menu.add_command(label="打开所在位置", command=lambda: self._reveal_file(path))
-        if self._disk_of(path).upper() == "C:" and "bigmove" in self.pages:
+        if self._disk_of(path).upper() == "C:" and "bigmove" in getattr(self, "_page_builders", {}):
             menu.add_separator()
             menu.add_command(label="搬到其他盘…", command=lambda: self._send_to_bigmove([path]))
         menu.tk_popup(event.x_root, event.y_root)
@@ -1290,10 +1324,9 @@ class App(_TkRoot):
             except OSError:
                 continue
             self.bigmove_rows.append((path, size, mtime))
-        self._render_bigmove()
         self.bigmove_checked.update(path for path in paths if path in {row[0] for row in self.bigmove_rows})
-        self._render_bigmove(keep_checked=True)
         self._show_page("bigmove")
+        self._render_bigmove(keep_checked=True)
 
     def _big_disk_menu(self, key, event):
         if key != "disk":
@@ -1343,18 +1376,30 @@ class App(_TkRoot):
     def _big_worker(self, gen, scope):
         drives = utils.fixed_drives() if scope == "全部磁盘" else [scope]
         rows = []
-        for drive in drives:
+        lock = threading.Lock()
+
+        def scan(drive):
             self.queue.put(("big_progress", gen, drive))
             try:
                 found = scanner.scan_large_files(drive, min_size=100 * 1024 * 1024, limit=None)
             except Exception:
-                continue
+                return
+            local = []
             for path, size in found:
                 try:
                     mtime = os.path.getmtime(path)
                 except OSError:
                     mtime = 0
-                rows.append((path, size, mtime))
+                local.append((path, size, mtime))
+            with lock:
+                rows.extend(local)
+
+        # 多块磁盘各扫各的，总耗时取决于最慢的那块，而不是相加。
+        threads = [threading.Thread(target=scan, args=(drive,), daemon=True) for drive in drives]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
         rows.sort(key=lambda item: item[1], reverse=True)
         system_names = {"pagefile.sys", "hiberfil.sys", "swapfile.sys",
                         "dumpstack.log.tmp", "memory.dmp"}
@@ -1616,7 +1661,7 @@ class App(_TkRoot):
             item.bind("<Button-1>", lambda _e, k=key: self._set_dup_rule(k))
             self.dup_rule_labels[key] = item
         self._paint_dup_rules()
-        self.dup_scope = tk.StringVar(value="全部磁盘")
+        self.dup_scope = tk.StringVar(value="C:\\")
         self._drive_tabs(parent, ["全部磁盘", "用户目录"] + utils.fixed_drives(),
                          self.dup_scope, self._rescan_dup)
         self.dup_tabs = tk.Frame(parent, bg=WHITE)
@@ -2359,19 +2404,48 @@ class App(_TkRoot):
 
 
     # ---------- 动作 ----------
+    def _load_external_categories(self):
+        """外置规则要逐条探测路径，放到后台展开，窗口先显示出来。"""
+        def work():
+            try:
+                extra = categories.get_external_categories({c.key for c in self.categories})
+            except Exception:
+                extra = []
+            self.queue.put(("categories_ready", extra))
+
+        threading.Thread(target=work, daemon=True).start()
+
     def start_scan(self):
+        if self._scanning:
+            return
         gen = self.jobs.start("clean")
         self.scan_complete = False
         self._scanning = True
         threading.Thread(target=self._scan_worker, args=(gen,), daemon=True).start()
 
     def _scan_worker(self, gen):
-        for cat in self.categories:
-            try:
-                size, count = scanner.scan_category(cat)
-            except Exception:
-                size, count = -1, 0
-            self.queue.put(("scanned", gen, cat.key, size, count))
+        # 各清理项互不相干，按类别并行统计，避免一项一项排队等 I/O。
+        pending = queue.Queue()
+        for cat in list(self.categories):
+            pending.put(cat)
+
+        def work():
+            while True:
+                try:
+                    cat = pending.get_nowait()
+                except queue.Empty:
+                    return
+                try:
+                    size, count = scanner.scan_category(cat)
+                except Exception:
+                    size, count = -1, 0
+                self.queue.put(("scanned", gen, cat.key, size, count))
+
+        threads = [threading.Thread(target=work, daemon=True) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
         self.queue.put(("scan_done", gen))
 
     def start_clean(self):
@@ -2497,7 +2571,10 @@ class App(_TkRoot):
 
     def _render_mig(self, rows):
         self.mig_rows = rows
-        self.mig_tree.delete(*self.mig_tree.get_children())
+        tree = getattr(self, "mig_tree", None)
+        if not tree:
+            return
+        tree.delete(*tree.get_children())
         for index, (name, path, size, status) in enumerate(rows):
             self.mig_tree.insert("", "end", iid=str(index),
                                  values=(name, path, utils.fmt_size(size) if size else "—", status),
@@ -2662,28 +2739,48 @@ class App(_TkRoot):
         threading.Thread(target=work, daemon=True).start()
 
     # ---------- 队列 ----------
+    def _schedule_scan_ui(self):
+        """扫描结果按类别逐条到达，界面合并刷新，避免几百次重建控件。"""
+        if self._scan_ui_job is None:
+            self._scan_ui_job = self.after(80, self._flush_scan_ui)
+
+    def _flush_scan_ui(self):
+        self._scan_ui_job = None
+        self._update_clean_head()
+        self._update_sidebar_sizes()
+
     def _poll(self):
-        try:
-            while True:
-                try:
-                    self._handle(self.queue.get_nowait())
-                except queue.Empty:
-                    break
-                except Exception:
-                    continue
-        except queue.Empty:
-            pass
+        for _ in range(400):
+            try:
+                message = self.queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                self._handle(message)
+            except Exception:
+                continue
         self.after(100, self._poll)
 
     def _handle(self, message):
         kind = message[0]
+        if kind == "categories_ready":
+            extra = message[1] if len(message) > 1 else []
+            known = {c.key for c in self.categories}
+            added = [cat for cat in extra if cat.key not in known]
+            self.categories.extend(added)
+            self.selected.update(cat.key for cat in added if cat.tier == categories.CONSERVATIVE)
+            self._refresh_clean_cards()
+            self._update_clean_head()
+            self._update_sidebar_sizes()
+            if not self._screenshot and not self.scan_complete:
+                self.start_scan()
+            return
         if kind == "scanned":
             _, gen, key, size, count = message
             if not self.jobs.accept("clean", gen):
                 return
             self.results[key] = (size, count)
-            self._update_clean_head()
-            self._update_sidebar_sizes()
+            self._schedule_scan_ui()
         elif kind == "scan_done":
             if not self.jobs.accept("clean", message[1]):
                 return

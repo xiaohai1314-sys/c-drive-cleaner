@@ -1,4 +1,5 @@
 """界面素材：圆角按钮、勾选框、文件图标、导航图标。用 Pillow 画，避免商标图案。"""
+import bisect
 import io
 import os
 import sys
@@ -479,15 +480,84 @@ class FileTable(object):
         self.inner.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
         window = canvas.create_window((0, 0), window=self.inner, anchor="nw")
         canvas.bind("<Configure>", lambda event: self._resize(canvas, window, event.width))
-        canvas.configure(yscrollcommand=scroll.set)
+        canvas.configure(yscrollcommand=self._on_scroll)
         canvas.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
         # 表头右侧留出和滚动条一样宽的空位，列才能和下面的行对齐。
         self._scroll = scroll
         self._canvas = canvas
+        self._window = window
         self._rows = []
-        self._names = []
+        self._offsets = []
+        self._heights = []
+        self._rendered = {}
+        self._visible = (0, 0)
         self._name_width = 300
+        self._sync_job = None
+        self._rebuild_job = None
+        canvas.bind("<MouseWheel>", self._on_wheel)
+
+    # 只渲染视口内的行：几千行也只创建几十个控件，切换页面和滚动都不会卡。
+    OVERSCAN = 8
+
+    def _on_scroll(self, first, last):
+        self._scroll.set(first, last)
+        self._schedule_sync()
+
+    def _schedule_sync(self):
+        if self._sync_job is None:
+            self._sync_job = self._canvas.after_idle(self._run_sync)
+
+    def _run_sync(self):
+        self._sync_job = None
+        self._sync_window()
+
+    def _on_wheel(self, event):
+        if self._total_height() > self._canvas.winfo_height():
+            self._canvas.yview_scroll(-1 if getattr(event, "delta", 0) > 0 else 1, "units")
+            self._schedule_sync()
+        return "break"
+
+    def _total_height(self):
+        return self._heights and (self._offsets[-1] + self._heights[-1]) or 0
+
+    def _sync_window(self, force=False):
+        rows = self._rows
+        if not rows:
+            start = end = 0
+        else:
+            top = self._canvas.canvasy(0)
+            height = max(self._canvas.winfo_height(), 1)
+            start = max(0, bisect.bisect_right(self._offsets, top) - 1)
+            end = min(len(rows), bisect.bisect_left(self._offsets, top + height) + 1)
+            start = max(0, start - self.OVERSCAN)
+            end = min(len(rows), end + self.OVERSCAN)
+        if not force and (start, end) == self._visible:
+            return
+        self._visible = (start, end)
+        for index in list(self._rendered):
+            if index < start or index >= end:
+                frame = self._rendered.pop(index)
+                try:
+                    frame.destroy()
+                except Exception:
+                    pass
+        for index in range(start, end):
+            if index not in self._rendered:
+                try:
+                    self._rendered[index] = self._build_row(index)
+                except Exception:
+                    continue
+
+    def _rebuild_visible(self):
+        for frame in self._rendered.values():
+            try:
+                frame.destroy()
+            except Exception:
+                pass
+        self._rendered.clear()
+        self._visible = (0, 0)
+        self._sync_window(force=True)
 
     def _configure_columns(self, widget):
         for column, (key, _title, width) in enumerate(self.headers):
@@ -507,11 +577,19 @@ class FileTable(object):
         name_width = max(120, width - fixed - 60)
         if abs(name_width - self._name_width) > 8:
             self._name_width = name_width
-            for label, text in self._names:
+            # 拖动窗口时连续触发，等停稳再重排行内文字。
+            if self._rebuild_job is not None:
                 try:
-                    label.configure(text=ellipsize_middle(text, name_width))
+                    self._canvas.after_cancel(self._rebuild_job)
                 except Exception:
                     pass
+            self._rebuild_job = self._canvas.after(120, self._run_rebuild)
+        else:
+            self._schedule_sync()
+
+    def _run_rebuild(self):
+        self._rebuild_job = None
+        self._rebuild_visible()
 
     def _head_click(self, key, event):
         if key in self.sortable and self.on_sort:
@@ -536,77 +614,101 @@ class FileTable(object):
             label.configure(text=text, fg="#1592e6" if key == sort_key else "#5c6b7a")
 
     def set_rows(self, rows):
-        import tkinter as tk
-        for child in self.inner.winfo_children():
-            child.destroy()
+        old_total = self._total_height()
         self._rows = list(rows or [])
-        self._names = []
+        self._offsets = []
+        self._heights = []
+        y = 0
+        last = len(self._rows) - 1
         for index, row in enumerate(self._rows):
-            bg = row.get("bg") or "#ffffff"
-            line = tk.Frame(self.inner, bg=bg, height=self.ROW_HEIGHT)
-            line.pack(fill="x")
-            line.grid_propagate(False)
-            line.grid_rowconfigure(0, weight=1)
-            self._configure_columns(line)
-            var = tk.BooleanVar(value=bool(row.get("checked")))
+            height = self.ROW_HEIGHT + (1 if row.get("group_end") and index < last else 0)
+            self._offsets.append(y)
+            self._heights.append(height)
+            y += height
+        for frame in self._rendered.values():
+            try:
+                frame.destroy()
+            except Exception:
+                pass
+        self._rendered.clear()
+        self._visible = (0, 0)
+        self.inner.configure(height=max(y, 1))
+        if y < old_total:
+            # 列表变短（筛选/清理后）才回到顶部；勾选等原地刷新保持滚动位置。
+            self._canvas.yview_moveto(0)
+        self._sync_window(force=True)
 
-            def fire(key=row.get("id"), variable=var):
-                if self.on_toggle:
-                    self.on_toggle(key, bool(variable.get()))
+    def _build_row(self, index):
+        import tkinter as tk
+        row = self._rows[index]
+        bg = row.get("bg") or "#ffffff"
+        line = tk.Frame(self.inner, bg=bg)
+        line.place(x=0, y=self._offsets[index], relwidth=1, height=self._heights[index])
+        line.grid_propagate(False)
+        line.grid_rowconfigure(0, weight=1)
+        self._configure_columns(line)
+        var = tk.BooleanVar(value=bool(row.get("checked")))
 
-            cells = list(row.get("cells") or [])
-            cell_index = 0
-            for column, (key, _title, _width) in enumerate(self.headers):
-                if key == "check":
-                    tick = Tick(line, var, command=fire, bg=bg, size=16)
-                    tick.widget.grid(row=0, column=column, sticky="w", padx=(10, 0))
-                elif key == "name":
-                    holder = tk.Frame(line, bg=bg)
-                    holder.grid(row=0, column=column, sticky="we")
-                    icon = row.get("icon")
-                    if icon is not None:
-                        tk.Label(holder, image=icon, bg=bg).pack(side="left", padx=(6, 6))
-                    full = row.get("name") or ""
-                    name = tk.Label(holder, text=ellipsize_middle(full, self._name_width), bg=bg,
-                                    fg="#243140", anchor="w", font=tk_font(9))
-                    if row.get("badge"):
-                        tk.Label(holder, text=row["badge"], bg="#e3f8f0", fg="#14a678", padx=6,
-                                 font=tk_font(8)).pack(side="right", padx=(4, 6))
-                    name.pack(side="left", fill="x", expand=True)
-                    self._names.append((name, full))
-                else:
-                    cell = cells[cell_index] if cell_index < len(cells) else ("",)
-                    cell_index += 1
-                    text = cell[0]
-                    action = cell[2] if len(cell) > 2 else None
-                    label = tk.Label(line, text=text, bg=bg, fg="#1592e6" if action else "#5c6b7a",
-                                     anchor="w", font=tk_font(9), cursor="hand2" if action else "")
-                    label.grid(row=0, column=column, sticky="we", padx=6)
-                    if action:
-                        label.bind("<Button-1>", lambda _e, fn=action: fn())
-            if row.get("group_end") and index < len(self._rows) - 1:
-                tk.Frame(self.inner, bg="#dfe8f1", height=1).pack(fill="x")
-            hover = "#e7f2fb"
+        def fire(key=row.get("id"), variable=var, data=row):
+            data["checked"] = bool(variable.get())
+            if self.on_toggle:
+                self.on_toggle(key, bool(variable.get()))
 
-            def enter(_event, widget=line, hot=hover):
-                _paint(widget, hot)
+        cells = list(row.get("cells") or [])
+        cell_index = 0
+        for column, (key, _title, _width) in enumerate(self.headers):
+            if key == "check":
+                tick = Tick(line, var, command=fire, bg=bg, size=16)
+                tick.widget.grid(row=0, column=column, sticky="w", padx=(10, 0))
+            elif key == "name":
+                holder = tk.Frame(line, bg=bg)
+                holder.grid(row=0, column=column, sticky="we")
+                icon = row.get("icon")
+                if icon is not None:
+                    tk.Label(holder, image=icon, bg=bg).pack(side="left", padx=(6, 6))
+                full = row.get("name") or ""
+                name = tk.Label(holder, text=ellipsize_middle(full, self._name_width), bg=bg,
+                                fg="#243140", anchor="w", font=tk_font(9))
+                if row.get("badge"):
+                    tk.Label(holder, text=row["badge"], bg="#e3f8f0", fg="#14a678", padx=6,
+                             font=tk_font(8)).pack(side="right", padx=(4, 6))
+                name.pack(side="left", fill="x", expand=True)
+            else:
+                cell = cells[cell_index] if cell_index < len(cells) else ("",)
+                cell_index += 1
+                text = cell[0]
+                action = cell[2] if len(cell) > 2 else None
+                label = tk.Label(line, text=text, bg=bg, fg="#1592e6" if action else "#5c6b7a",
+                                 anchor="w", font=tk_font(9), cursor="hand2" if action else "")
+                label.grid(row=0, column=column, sticky="we", padx=6)
+                if action:
+                    label.bind("<Button-1>", lambda _e, fn=action: fn())
+        if row.get("group_end") and index < len(self._rows) - 1:
+            tk.Frame(line, bg="#dfe8f1", height=1).place(x=0, rely=1.0, y=-1, relwidth=1)
+        hover = "#e7f2fb"
 
-            def leave(_event, widget=line, base=bg):
-                _paint(widget, base)
+        def enter(_event, widget=line, hot=hover):
+            _paint(widget, hot)
 
-            line.bind("<Enter>", enter)
-            line.bind("<Leave>", leave)
-            if self.on_pick:
-                line.bind("<Button-1>", lambda _e, key=row.get("id"): self.on_pick(key))
-            if self.on_menu or self.on_open:
-                widgets = [line] + _descendants(line)
-                for widget in widgets:
-                    if isinstance(widget, tk.Label) and str(widget.cget("cursor")) == "hand2":
-                        continue
-                    if self.on_menu:
-                        widget.bind("<Button-3>", lambda event, key=row.get("id"): self.on_menu(key, event))
-                    if self.on_open:
-                        widget.bind("<Double-Button-1>", lambda _e, key=row.get("id"): self.on_open(key))
+        def leave(_event, widget=line, base=bg):
+            _paint(widget, base)
+
+        line.bind("<Enter>", enter)
+        line.bind("<Leave>", leave)
+        if self.on_pick:
+            line.bind("<Button-1>", lambda _e, key=row.get("id"): self.on_pick(key))
+        widgets = [line] + _descendants(line)
+        for widget in widgets:
+            widget.bind("<MouseWheel>", self._on_wheel)
+        if self.on_menu or self.on_open:
+            for widget in widgets:
+                if isinstance(widget, tk.Label) and str(widget.cget("cursor")) == "hand2":
+                    continue
+                if self.on_menu:
+                    widget.bind("<Button-3>", lambda event, key=row.get("id"): self.on_menu(key, event))
+                if self.on_open:
+                    widget.bind("<Double-Button-1>", lambda _e, key=row.get("id"): self.on_open(key))
+        return line
 
 
 def ellipsize_middle(text, pixels, size=9):
@@ -626,9 +728,15 @@ def ellipsize_middle(text, pixels, size=9):
         return text
     head = text[:3] if len(text) > 3 and text[1:3] == ":\\" else ""
     tail = text[len(head):]
-    while tail and measure(head + "…" + tail) > pixels:
-        tail = tail[1:]
-    return head + "…" + tail
+    # 二分找能放下的最长尾部，比逐字测量少一个数量级的 Tcl 调用。
+    low, high = 0, len(tail)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if measure(head + "…" + tail[-mid:]) <= pixels:
+            low = mid
+        else:
+            high = mid - 1
+    return head + "…" + (tail[-low:] if low else "")
 
 
 def _descendants(widget):

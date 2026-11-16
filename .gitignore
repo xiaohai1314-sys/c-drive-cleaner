@@ -12,6 +12,7 @@ logs/
 
 # Rust 编译产物，用 mftreader.rs 重新编译：rustc -O -C panic=abort mftreader.rs -o mftreader.exe
 mftreader.exe
+desktop/target/
 
 # 系统文件
 Thumbs.db

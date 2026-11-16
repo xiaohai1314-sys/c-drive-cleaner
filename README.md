@@ -2,6 +2,10 @@
 
 Windows 下的图形化 C 盘清理工具，先扫描、再勾选、后清理。基于 Python + tkinter，无需安装任何第三方库。
 
+> **Rust + Tauri 版已完成迁移**：新前端在 `desktop/`（Rust 后端 + 纯静态 HTML/CSS/JS），
+> 八个页面、扫描与删除/粉碎逻辑都已迁移；少量差异（USB 痕迹只统计、搜索记录未迁移）见
+> [desktop/README.md](desktop/README.md)。Python 版保留，可继续使用。
+
 ## 两种运行方式
 
 **方式一：直接用 exe（目标电脑不需要 Python）**

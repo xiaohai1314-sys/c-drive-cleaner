@@ -132,6 +132,45 @@ def _age_minutes(value):
         return 0
 
 
+def _build_external_category(item, tiers):
+    key = item.get("key")
+    if not key:
+        return None
+    if not _detect_satisfied(item.get("detect", [])):
+        return None
+    if not _os_in_range(item.get("os_min", ""), item.get("os_max", "")):
+        return None
+    paths = _expand_rule_paths(item.get("paths", []))
+    for path in _expand_rule_paths(item.get("glob_dirs", [])):
+        if os.path.isdir(path):
+            paths.append(path)
+    command = [os.path.expandvars(part) for part in item.get("command", [])]
+    if not paths and not command:
+        return None
+    return Category(
+        key=key,
+        name=item.get("name", key),
+        tier=tiers.get(item.get("tier", "standard"), STANDARD),
+        kind=item.get("kind", "files"),
+        describe=item.get("describe", ""),
+        paths=paths,
+        patterns=tuple(item.get("patterns", ["*"])),
+        command=command,
+        note=item.get("note", ""),
+        warning=item.get("warning", ""),
+        requires_confirm=bool(item.get("requires_confirm", False)),
+        prune_dirs=bool(item.get("prune_dirs", False)),
+        untrusted=True,
+        exclude=_pattern_tuple(item.get("exclude", [])),
+        min_age_minutes=_age_minutes(item.get("min_age_minutes", 0)),
+        process_absent=_pattern_tuple(item.get("process_absent", [])),
+        detect=tuple(item.get("detect", []) or []),
+        os_min=str(item.get("os_min", "") or ""),
+        os_max=str(item.get("os_max", "") or ""),
+        irreversible_log=bool(item.get("irreversible_log", False)),
+    )
+
+
 def _load_external_rules():
     """从同目录的 rules.json 读取可扩展清理项（规则外置化）。"""
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules.json")
@@ -143,45 +182,9 @@ def _load_external_rules():
     except Exception:
         return []
     tiers = {"conservative": CONSERVATIVE, "standard": STANDARD, "deep": DEEP}
-    cats = []
-    for item in data.get("categories", []):
-        key = item.get("key")
-        if not key:
-            continue
-        if not _detect_satisfied(item.get("detect", [])):
-            continue
-        if not _os_in_range(item.get("os_min", ""), item.get("os_max", "")):
-            continue
-        paths = _expand_rule_paths(item.get("paths", []))
-        for path in _expand_rule_paths(item.get("glob_dirs", [])):
-            if os.path.isdir(path):
-                paths.append(path)
-        command = [os.path.expandvars(part) for part in item.get("command", [])]
-        if not paths and not command:
-            continue
-        cats.append(Category(
-            key=key,
-            name=item.get("name", key),
-            tier=tiers.get(item.get("tier", "standard"), STANDARD),
-            kind=item.get("kind", "files"),
-            describe=item.get("describe", ""),
-            paths=paths,
-            patterns=tuple(item.get("patterns", ["*"])),
-            command=command,
-            note=item.get("note", ""),
-            warning=item.get("warning", ""),
-            requires_confirm=bool(item.get("requires_confirm", False)),
-            prune_dirs=bool(item.get("prune_dirs", False)),
-            untrusted=True,
-            exclude=_pattern_tuple(item.get("exclude", [])),
-            min_age_minutes=_age_minutes(item.get("min_age_minutes", 0)),
-            process_absent=_pattern_tuple(item.get("process_absent", [])),
-            detect=tuple(item.get("detect", []) or []),
-            os_min=str(item.get("os_min", "") or ""),
-            os_max=str(item.get("os_max", "") or ""),
-            irreversible_log=bool(item.get("irreversible_log", False)),
-        ))
-    return cats
+    items = [item for item in data.get("categories", []) if isinstance(item, dict)]
+    built = [_build_external_category(item, tiers) for item in items]
+    return [cat for cat in built if cat is not None]
 
 
 def _other_recycle_bins():
@@ -331,7 +334,7 @@ def _dev_cache_dirs():
     ]
 
 
-def get_categories():
+def get_builtin_categories():
     local = os.environ.get("LOCALAPPDATA", "")
     roaming = os.environ.get("APPDATA", "")
     profile = os.environ.get("USERPROFILE", "")
@@ -779,10 +782,21 @@ def get_categories():
                      "*.pdf", "*.dwg"),
         ))
 
-    existing_keys = {c.key for c in cats}
-    for extra in _load_external_rules():
-        if extra.key not in existing_keys:
-            cats.append(extra)
-            existing_keys.add(extra.key)
+    return cats
 
+
+def get_external_categories(existing_keys=()):
+    """展开外置规则（要逐条探测路径），调用方应放在后台线程里跑。"""
+    existing = set(existing_keys or ())
+    out = []
+    for extra in _load_external_rules():
+        if extra.key not in existing:
+            out.append(extra)
+            existing.add(extra.key)
+    return out
+
+
+def get_categories():
+    cats = get_builtin_categories()
+    cats.extend(get_external_categories({c.key for c in cats}))
     return cats

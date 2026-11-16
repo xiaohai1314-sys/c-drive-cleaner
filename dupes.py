@@ -2,12 +2,13 @@
 import hashlib
 import os
 import stat
+import threading
 
 import safepath
 import utils
 
 
-def _file_hash(path, chunk=1024 * 1024):
+def _file_hash(path, chunk=4 * 1024 * 1024):
     digest = hashlib.sha1()
     try:
         with open(path, "rb") as handle:
@@ -245,33 +246,66 @@ def sort_duplicate_groups(groups, key="size", desc=True):
     return [group for _sort_key_value, group in ordered]
 
 
+def _parallel_map(func, items, workers=8):
+    """用守护线程并行跑 func，结果按输入顺序返回。
+
+    磁盘读取是 I/O 等待，多线程能明显缩短哈希时间；用守护线程是为了用户中途
+    关掉程序时进程能立刻退出，不被后台哈希拖住。
+    """
+    items = list(items)
+    results = [None] * len(items)
+    lock = threading.Lock()
+    cursor = [0]
+
+    def worker():
+        while True:
+            with lock:
+                index = cursor[0]
+                if index >= len(items):
+                    return
+                cursor[0] = index + 1
+            try:
+                results[index] = func(items[index])
+            except Exception:
+                results[index] = None
+
+    threads = [threading.Thread(target=worker, daemon=True) for _ in range(max(1, workers))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return results
+
+
 def find_duplicates(roots, min_size=1 << 20, progress=None, cancel=None):
     """返回重复组列表：{hash, size, files, mtimes, identities}。"""
     import fastscan
+    import scanner
     by_size = {}
     for root in roots:
         if not os.path.isdir(root):
             continue
-        for path, size in fastscan.iter_files(root, min_size=min_size):
+        # 系统目录里的文件本工具不会删（删除前会按保护路径过滤），扫它们只是白费时间。
+        for path, size in fastscan.iter_files(root, skip_top=scanner.TOP_SKIP, min_size=min_size):
             if cancel and cancel():
                 return []
             by_size.setdefault(size, []).append(path)
 
     groups = []
     for size, paths in by_size.items():
+        if cancel and cancel():
+            return []
         if len(paths) < 2:
             continue
         sampled = {}
-        for path in paths:
-            digest = _sample_hash(path, size)
+        for path, digest in zip(paths, _parallel_map(lambda one, s=size: _sample_hash(one, s), paths)):
             if digest:
                 sampled.setdefault(digest, []).append(path)
         for candidates in sampled.values():
             if len(candidates) < 2:
                 continue
             exact = {}
-            for path in candidates:
-                digest = _file_hash(path)
+            for path, digest in zip(candidates, _parallel_map(_file_hash, candidates)):
                 if digest:
                     exact.setdefault(digest, []).append(path)
             for digest, same in exact.items():
