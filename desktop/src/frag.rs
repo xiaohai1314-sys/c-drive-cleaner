@@ -74,7 +74,28 @@ pub fn defrag_path() -> String {
     format!("{}\\System32\\defrag.exe", root.trim_end_matches('\\'))
 }
 
+fn valid_fixed_drive(drive: &str) -> bool {
+    let value = drive.trim();
+    value.len() == 3
+        && value.as_bytes()[1] == b':'
+        && value.ends_with('\\')
+        && value.as_bytes()[0].is_ascii_alphabetic()
+        && crate::fixed_drives()
+            .iter()
+            .any(|item| item.eq_ignore_ascii_case(value))
+}
+
 pub fn analyze(drive: &str) -> FragReport {
+    if !valid_fixed_drive(drive) {
+        return FragReport {
+            drive: drive.to_string(),
+            percent: None,
+            space_gb: None,
+            count: None,
+            free_gb: None,
+            ssd: None,
+        };
+    }
     let ssd = is_ssd(drive);
     let output = Command::new(defrag_path())
         .arg(drive)
@@ -105,6 +126,9 @@ pub fn analyze(drive: &str) -> FragReport {
 }
 
 pub fn optimize(drive: &str) -> Result<(), String> {
+    if !valid_fixed_drive(drive) {
+        return Err("只允许优化系统识别出的固定磁盘".to_string());
+    }
     let status = Command::new(defrag_path())
         .arg(drive)
         .arg("/O")

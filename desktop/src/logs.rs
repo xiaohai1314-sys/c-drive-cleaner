@@ -7,15 +7,15 @@ use std::path::{Path, PathBuf};
 use crate::timeutil;
 
 pub fn log_dir() -> PathBuf {
-    let base = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|dir| dir.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
-    let candidate = if base.ends_with("debug") || base.ends_with("release") {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../logs")
-    } else {
-        base.join("logs")
-    };
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(|dir| dir.to_path_buf()))
+                .unwrap_or_else(|| PathBuf::from("."))
+        });
+    let candidate = base.join("C盘清理工具").join("logs");
     let _ = std::fs::create_dir_all(&candidate);
     candidate
 }
@@ -33,13 +33,40 @@ pub fn write_log(lines: &[String]) -> Option<PathBuf> {
     for line in lines {
         let _ = writeln!(file, "{}", line.trim_end());
     }
+    rotate_old_logs(&dir);
     Some(path)
 }
 
+fn rotate_old_logs(dir: &Path) {
+    let mut entries: Vec<(PathBuf, std::time::SystemTime)> = std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("log") {
+                return None;
+            }
+            Some((path.clone(), std::fs::metadata(path).ok()?.modified().ok()?))
+        })
+        .collect();
+    entries.sort_by(|left, right| right.1.cmp(&left.1));
+    for (path, _) in entries.into_iter().skip(100) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 pub fn append_line(name: &str, line: &str) {
+    if name.trim().is_empty() || name.contains(['\\', '/']) || name.contains("..") {
+        return;
+    }
     let dir = log_dir();
     let path = dir.join(name);
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         let _ = writeln!(file, "{}", line);
     }
 }

@@ -11,6 +11,7 @@ use crate::safety;
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+const MAX_PASSES: u32 = 3;
 
 #[derive(Serialize)]
 pub struct ShredReport {
@@ -22,6 +23,7 @@ pub struct ShredReport {
 }
 
 pub fn shred_paths(paths: Vec<String>, passes: u32) -> ShredReport {
+    let passes = passes.clamp(1, MAX_PASSES);
     let mut report = ShredReport {
         freed: 0,
         files_ok: 0,
@@ -37,12 +39,16 @@ pub fn shred_paths(paths: Vec<String>, passes: u32) -> ShredReport {
         }
         if safety::is_reparse_point(&path) {
             report.files_failed += 1;
-            report.errors.push(format!("不能粉碎符号链接或目录联接：{}", path));
+            report
+                .errors
+                .push(format!("不能粉碎符号链接或目录联接：{}", path));
             continue;
         }
         if safety::is_protected_path(&path) {
             report.files_failed += 1;
-            report.errors.push(format!("为保护系统，拒绝粉碎：{}", path));
+            report
+                .errors
+                .push(format!("为保护系统，拒绝粉碎：{}", path));
             continue;
         }
         if Path::new(&path).is_dir() {
@@ -84,7 +90,9 @@ fn shred_directory(root: &str, passes: u32, report: &mut ShredReport) {
     for path in files {
         if safety::is_protected_path(&path) {
             report.files_failed += 1;
-            report.errors.push(format!("为保护系统，拒绝粉碎：{}", path));
+            report
+                .errors
+                .push(format!("为保护系统，拒绝粉碎：{}", path));
             continue;
         }
         match shred_file(&path, passes) {

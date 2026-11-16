@@ -64,6 +64,7 @@ html, body {
 
 .sidebar-bottom { padding: 10px 14px 0; display: flex; flex-direction: column; gap: 6px; }
 .sidebar-bottom a { color: #2f80ed; font-size: 12px; text-decoration: none; }
+.sidebar-bottom a:hover { text-decoration: underline; }
 
 /* ---------- 主区域 ---------- */
 .main { flex: 1; background: var(--page); overflow: auto; position: relative; }
@@ -125,6 +126,11 @@ html, body {
 .card.checked .tick::after {
   content: ""; position: absolute; left: 4px; top: 1px; width: 6px; height: 10px;
   border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.card.unsupported { opacity: .58; cursor: not-allowed; }
+.card.unsupported::after {
+  content: "暂未支持"; position: absolute; top: 10px; right: 10px;
+  color: #8a6d3b; font-size: 12px;
 }
 
 /* 表格 */
@@ -239,6 +245,11 @@ html, body {
 .btn-primary:hover { background: var(--green-dark); }
 .btn-ghost { background: #eef3f8; color: #45566a; }
 .btn-ghost:hover { background: #e3ebf4; }
+.gray-btn {
+  border: 0; border-radius: 20px; background: #eef3f8; color: #45566a;
+  font-size: 13px; padding: 9px 18px; cursor: pointer;
+}
+.gray-btn:hover { background: #e3ebf4; }
 
 /* 提示条 */
 .toast {

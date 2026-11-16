@@ -11,7 +11,14 @@ use crate::safety;
 const MAX_BYTES: u64 = 1_000_000;
 const MAX_RULES: usize = 200;
 const TIERS: [&str; 3] = ["conservative", "standard", "deep"];
-const LIBRARY_PARTS: [&str; 6] = ["documents", "desktop", "downloads", "my documents", "文档", "桌面"];
+const LIBRARY_PARTS: [&str; 6] = [
+    "documents",
+    "desktop",
+    "downloads",
+    "my documents",
+    "文档",
+    "桌面",
+];
 
 pub fn remote_rules_path() -> PathBuf {
     let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
@@ -20,11 +27,16 @@ pub fn remote_rules_path() -> PathBuf {
     dir.join("rules_remote.json")
 }
 
+fn remote_rules_backup_path() -> PathBuf {
+    remote_rules_path().with_file_name("rules_remote.previous.json")
+}
+
 fn config_path() -> Option<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join("rules_update.json"));
+            candidates.push(dir.join("resources").join("rules_update.json"));
         }
     }
     candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../rules_update.json"));
@@ -47,6 +59,17 @@ fn config_url() -> String {
         .unwrap_or("")
         .trim()
         .to_string()
+}
+
+fn config_hash() -> Option<String> {
+    let path = config_path()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let value = serde_json::from_str::<Value>(&text).ok()?;
+    value
+        .get("blake3")
+        .and_then(|item| item.as_str())
+        .map(|item| item.trim().to_lowercase())
+        .filter(|item| item.len() == 64)
 }
 
 fn key_ok(key: &str) -> bool {
@@ -75,7 +98,10 @@ fn path_allowed(raw: &str) -> Result<(), String> {
         .filter(|part| !part.is_empty())
         .map(|part| part.to_string())
         .collect();
-    if parts.iter().any(|part| LIBRARY_PARTS.contains(&part.as_str())) {
+    if parts
+        .iter()
+        .any(|part| LIBRARY_PARTS.contains(&part.as_str()))
+    {
         return Err("远程规则不能指向文档、桌面或下载".to_string());
     }
     let name = safety::basename(&expanded).to_lowercase();
@@ -92,20 +118,33 @@ fn validate(item: &Value) -> Result<(), String> {
     let Some(object) = item.as_object() else {
         return Err("规则格式不正确".to_string());
     };
-    let key = object.get("key").and_then(|value| value.as_str()).unwrap_or("");
+    let key = object
+        .get("key")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
     if !key_ok(key) {
         return Err("规则 key 不合法".to_string());
     }
-    let kind = object.get("kind").and_then(|value| value.as_str()).unwrap_or("files");
+    let kind = object
+        .get("kind")
+        .and_then(|value| value.as_str())
+        .unwrap_or("files");
     if kind != "files" {
         return Err(format!("规则 {} 不是文件清理类型", key));
     }
-    let tier = object.get("tier").and_then(|value| value.as_str()).unwrap_or("standard");
+    let tier = object
+        .get("tier")
+        .and_then(|value| value.as_str())
+        .unwrap_or("standard");
     if !TIERS.contains(&tier) {
         return Err(format!("规则 {} 的档位不合法", key));
     }
     if let Some(command) = object.get("command") {
-        if command.as_array().map(|list| !list.is_empty()).unwrap_or(true) {
+        if command
+            .as_array()
+            .map(|list| !list.is_empty())
+            .unwrap_or(true)
+        {
             return Err(format!("规则 {} 不能带命令", key));
         }
     }
@@ -144,7 +183,14 @@ pub fn update() -> Result<(usize, usize, String), String> {
     if text.len() as u64 > MAX_BYTES {
         return Err("规则文件过大".to_string());
     }
-    let parsed: Value = serde_json::from_str(&text).map_err(|error| format!("规则格式不正确：{}", error))?;
+    if let Some(expected) = config_hash() {
+        let actual = blake3::hash(text.as_bytes()).to_hex().to_string();
+        if actual != expected {
+            return Err("规则完整性校验失败，未保存更新".to_string());
+        }
+    }
+    let parsed: Value =
+        serde_json::from_str(&text).map_err(|error| format!("规则格式不正确：{}", error))?;
     let Some(categories) = parsed.get("categories").and_then(|value| value.as_array()) else {
         return Err("规则文件缺少 categories".to_string());
     };
@@ -156,13 +202,60 @@ pub fn update() -> Result<(usize, usize, String), String> {
         validate(item)?;
         accepted.push(item.clone());
     }
-    let payload = serde_json::json!({ "version": 1, "categories": accepted });
     let path = remote_rules_path();
-    std::fs::write(
-        &path,
-        serde_json::to_string_pretty(&payload).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| format!("写入失败：{}", error))?;
+    let old_version = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|old| serde_json::from_str::<Value>(&old).ok())
+        .and_then(|old| old.get("version").and_then(|value| value.as_u64()))
+        .unwrap_or(0);
+    let incoming_version = parsed
+        .get("version")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(1);
+    if incoming_version < old_version {
+        return Err(format!(
+            "规则版本过旧：当前 {}，收到 {}",
+            old_version, incoming_version
+        ));
+    }
+    let payload = serde_json::json!({ "version": incoming_version, "categories": accepted });
+    let temp = path.with_extension("json.tmp");
+    let encoded = serde_json::to_string_pretty(&payload).map_err(|error| error.to_string())?;
+    std::fs::write(&temp, encoded).map_err(|error| format!("写入临时文件失败：{}", error))?;
+    if path.is_file() {
+        let _ = std::fs::copy(&path, remote_rules_backup_path());
+    }
+    std::fs::rename(&temp, &path).map_err(|error| format!("替换规则文件失败：{}", error))?;
     let total = crate::all_rules().len();
-    Ok((accepted.len(), total, format!("已保存到 {}", path.display())))
+    Ok((
+        accepted.len(),
+        total,
+        format!("已保存到 {}，版本 {}", path.display(), incoming_version),
+    ))
+}
+
+pub fn rollback() -> Result<String, String> {
+    let path = remote_rules_path();
+    let backup = remote_rules_backup_path();
+    if !backup.is_file() {
+        return Err("没有可回滚的规则版本".to_string());
+    }
+    let text = std::fs::read_to_string(&backup).map_err(|error| error.to_string())?;
+    let value: Value =
+        serde_json::from_str(&text).map_err(|error| format!("备份规则损坏：{}", error))?;
+    let categories = value
+        .get("categories")
+        .and_then(|value| value.as_array())
+        .ok_or("备份规则缺少 categories")?;
+    if categories.len() > MAX_RULES {
+        return Err("备份规则数量超限".to_string());
+    }
+    for item in categories {
+        validate(item)?;
+    }
+    std::fs::copy(&backup, &path).map_err(|error| format!("回滚失败：{}", error))?;
+    Ok(format!(
+        "已回滚到规则版本 {}",
+        value.get("version").and_then(|v| v.as_u64()).unwrap_or(0)
+    ))
 }

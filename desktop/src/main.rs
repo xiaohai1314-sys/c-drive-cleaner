@@ -17,6 +17,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
@@ -25,6 +26,79 @@ use std::os::windows::process::CommandExt;
 const RULES_JSON: &str = include_str!("../../rules.json");
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+#[derive(Serialize, Clone)]
+struct ScanStatus {
+    active: bool,
+    stage: String,
+    cancelled: bool,
+}
+
+static SCAN_STATUS: OnceLock<Mutex<HashMap<String, ScanStatus>>> = OnceLock::new();
+
+fn scan_status_cell() -> &'static Mutex<HashMap<String, ScanStatus>> {
+    SCAN_STATUS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn scan_begin(kind: &str, stage: &str) {
+    if let Ok(mut map) = scan_status_cell().lock() {
+        map.insert(
+            kind.to_string(),
+            ScanStatus {
+                active: true,
+                stage: stage.to_string(),
+                cancelled: false,
+            },
+        );
+    }
+}
+
+fn scan_end(kind: &str) {
+    if let Ok(mut map) = scan_status_cell().lock() {
+        if let Some(status) = map.get_mut(kind) {
+            status.active = false;
+        }
+    }
+}
+
+fn scan_was_cancelled(kind: &str) -> bool {
+    scan_status_cell()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(kind).map(|status| status.cancelled))
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn scan_status() -> HashMap<String, ScanStatus> {
+    scan_status_cell()
+        .lock()
+        .map(|map| map.clone())
+        .unwrap_or_default()
+}
+
+/// 不传 kind 时取消所有正在跑的扫描。
+#[tauri::command]
+fn cancel_scan(kind: Option<String>) {
+    if let Ok(mut map) = scan_status_cell().lock() {
+        match kind {
+            Some(kind) => {
+                if let Some(status) = map.get_mut(&kind) {
+                    if status.active {
+                        status.cancelled = true;
+                    }
+                }
+            }
+            None => {
+                for status in map.values_mut() {
+                    if status.active {
+                        status.cancelled = true;
+                    }
+                }
+            }
+        }
+    }
+}
 
 const TOP_SKIP: [&str; 13] = [
     "$recycle.bin",
@@ -62,6 +136,7 @@ struct CategorySize {
     size: i64,
     count: u64,
     requires_confirm: bool,
+    implemented: bool,
 }
 
 #[derive(Serialize)]
@@ -71,7 +146,7 @@ struct BigFile {
     mtime: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct DupGroup {
     hash: String,
     size: u64,
@@ -173,12 +248,42 @@ pub(crate) fn all_rules() -> Vec<Rule> {
 }
 
 fn scan_rule(rule: &Rule) -> Option<CategorySize> {
-    let kind: &str = if rule.kind.is_empty() { "files" } else { rule.kind.as_str() };
-    if kind != "files" || rule.key.is_empty() {
+    let kind: &str = if rule.kind.is_empty() {
+        "files"
+    } else {
+        rule.kind.as_str()
+    };
+    if rule.key.is_empty() {
         return None;
     }
+    if kind != "files" {
+        return Some(CategorySize {
+            key: rule.key.clone(),
+            name: if rule.name.is_empty() {
+                rule.key.clone()
+            } else {
+                rule.name.clone()
+            },
+            tier: if rule.tier.is_empty() {
+                "standard".into()
+            } else {
+                rule.tier.clone()
+            },
+            describe: rule.describe.clone(),
+            warning: rule.warning.clone(),
+            note: rule.note.clone(),
+            size: 0,
+            count: 0,
+            requires_confirm: true,
+            implemented: false,
+        });
+    }
     let mut roots = expand_paths(&rule.paths);
-    roots.extend(expand_paths(&rule.glob_dirs).into_iter().filter(|p| p.is_dir()));
+    roots.extend(
+        expand_paths(&rule.glob_dirs)
+            .into_iter()
+            .filter(|p| p.is_dir()),
+    );
     roots.sort();
     roots.dedup();
     if roots.is_empty() {
@@ -208,7 +313,11 @@ fn scan_rule(rule: &Rule) -> Option<CategorySize> {
             }
             continue;
         }
-        for entry in WalkDir::new(root).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+        for entry in WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -230,14 +339,23 @@ fn scan_rule(rule: &Rule) -> Option<CategorySize> {
 
     Some(CategorySize {
         key: rule.key.clone(),
-        name: if rule.name.is_empty() { rule.key.clone() } else { rule.name.clone() },
-        tier: if rule.tier.is_empty() { "standard".into() } else { rule.tier.clone() },
+        name: if rule.name.is_empty() {
+            rule.key.clone()
+        } else {
+            rule.name.clone()
+        },
+        tier: if rule.tier.is_empty() {
+            "standard".into()
+        } else {
+            rule.tier.clone()
+        },
         describe: rule.describe.clone(),
         warning: rule.warning.clone(),
         note: rule.note.clone(),
         size: size as i64,
         count,
         requires_confirm: rule.requires_confirm || rule.tier == "deep",
+        implemented: true,
     })
 }
 
@@ -274,7 +392,9 @@ fn age_ok(meta: &std::fs::Metadata, min_age: Duration, now: SystemTime) -> bool 
     let Ok(modified) = meta.modified() else {
         return true;
     };
-    now.duration_since(modified).map(|d| d >= min_age).unwrap_or(true)
+    now.duration_since(modified)
+        .map(|d| d >= min_age)
+        .unwrap_or(true)
 }
 
 pub(crate) fn expand_env(raw: &str) -> String {
@@ -336,11 +456,17 @@ fn is_reparse(meta: &std::fs::Metadata) -> bool {
 
 #[tauri::command]
 fn scan_big(drives: Option<Vec<String>>) -> Vec<BigFile> {
+    scan_begin("big", "大文件扫描");
     let list = drives.unwrap_or_else(fixed_drives);
     let mut rows: Vec<BigFile> = list
         .par_iter()
         .flat_map(|drive| {
-            mft_files(drive, 100 * 1024 * 1024, &TOP_SKIP)
+            let files = if scan_was_cancelled("big") {
+                Vec::new()
+            } else {
+                mft_files(drive, 100 * 1024 * 1024, &TOP_SKIP)
+            };
+            files
                 .into_par_iter()
                 .map(|(path, size)| BigFile {
                     mtime: file_mtime(&path),
@@ -352,6 +478,7 @@ fn scan_big(drives: Option<Vec<String>>) -> Vec<BigFile> {
         .filter(|row| !is_system_file_name(&row.path))
         .collect();
     rows.sort_by(|a, b| b.size.cmp(&a.size));
+    scan_end("big");
     rows
 }
 
@@ -370,12 +497,36 @@ fn is_system_file_name(path: &str) -> bool {
 
 #[tauri::command]
 fn scan_dups(root: Option<String>, min_size: Option<u64>) -> Vec<DupGroup> {
+    scan_begin("dup", "重复文件扫描");
     let trace = std::env::var("CDC_TRACE").is_ok();
     let roots = root.map(|r| vec![r]).unwrap_or_else(fixed_drives);
     let min = min_size.unwrap_or(1 << 20);
+    let cache_key = blake3::hash(format!("{:?}:{}", roots, min).as_bytes())
+        .to_hex()
+        .to_string();
+    let cache_path = cache_dir().join(format!("dups-{}.json", cache_key));
+    if let Ok(meta) = std::fs::metadata(&cache_path) {
+        let fresh = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.elapsed().ok())
+            .map(|age| age < Duration::from_secs(300))
+            .unwrap_or(false);
+        if fresh {
+            if let Ok(text) = std::fs::read_to_string(&cache_path) {
+                if let Ok(groups) = serde_json::from_str::<Vec<DupGroup>>(&text) {
+                    scan_end("dup");
+                    return groups;
+                }
+            }
+        }
+    }
     let started = std::time::Instant::now();
     let mut by_size: HashMap<u64, Vec<String>> = HashMap::new();
     for drive in &roots {
+        if scan_was_cancelled("dup") {
+            break;
+        }
         for (path, size) in mft_files(drive, min, &TOP_SKIP) {
             by_size.entry(size).or_default().push(path);
         }
@@ -396,8 +547,11 @@ fn scan_dups(root: Option<String>, min_size: Option<u64>) -> Vec<DupGroup> {
 
     let mut groups: Vec<DupGroup> = by_size
         .par_iter()
-        .filter(|(_, paths)| paths.len() >= 2)
+        .filter(|(_, paths)| paths.len() >= 2 && !scan_was_cancelled("dup"))
         .flat_map(|(size, paths)| {
+            if scan_was_cancelled("dup") {
+                return Vec::new();
+            }
             let sampled: Vec<(String, Option<String>)> = paths
                 .par_iter()
                 .map(|path| (path.clone(), sample_hash(Path::new(path), *size)))
@@ -410,6 +564,9 @@ fn scan_dups(root: Option<String>, min_size: Option<u64>) -> Vec<DupGroup> {
             }
             let mut found = Vec::new();
             for candidates in by_sample.into_values().filter(|c| c.len() >= 2) {
+                if scan_was_cancelled("dup") {
+                    break;
+                }
                 let hashed: Vec<(String, Option<String>)> = candidates
                     .par_iter()
                     .map(|path| (path.clone(), full_hash(Path::new(path))))
@@ -450,7 +607,27 @@ fn scan_dups(root: Option<String>, min_size: Option<u64>) -> Vec<DupGroup> {
             started.elapsed().as_secs_f64()
         );
     }
+    if !scan_was_cancelled("dup") && !groups.is_empty() {
+        if let Ok(text) = serde_json::to_string(&groups) {
+            let _ = std::fs::write(&cache_path, text);
+        }
+    }
+    scan_end("dup");
     groups
+}
+
+/// 删除文件后清掉重复文件缓存，避免 5 分钟内再次扫描还显示已删掉的组。
+pub(crate) fn invalidate_dup_cache() {
+    let dir = cache_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with("dups-") && name.ends_with(".json") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn sample_hash(path: &Path, size: u64) -> Option<String> {
@@ -496,6 +673,7 @@ fn mft_exe() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join("mftreader.exe"));
+            candidates.push(dir.join("resources").join("mftreader.exe"));
         }
     }
     candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../mftreader.exe"));
@@ -539,12 +717,12 @@ fn mft_files(root: &str, min_size: u64, skip_top: &[&str]) -> Vec<(String, u64)>
         if size < min_size {
             continue;
         }
-        let relative = if path.len() > root_len { &path[root_len..] } else { path };
-        let first = relative
-            .split('\\')
-            .next()
-            .unwrap_or("")
-            .to_lowercase();
+        let relative = if path.len() > root_len {
+            &path[root_len..]
+        } else {
+            path
+        };
+        let first = relative.split('\\').next().unwrap_or("").to_lowercase();
         if skip_top.iter().any(|skip| *skip == first) {
             continue;
         }
@@ -652,9 +830,9 @@ fn delete_recycle(paths: Vec<String>) -> DeleteReport {
             reasons.push(format!("{}：文件已不存在", path));
             continue;
         }
-        if safety::is_protected_path(&path) {
+        if safety::explicit_delete_forbidden(&path) {
             failed.push(path.clone());
-            reasons.push(format!("{}：受保护的系统路径，已跳过", path));
+            reasons.push(format!("{}：受保护路径或密码库，已跳过", path));
             continue;
         }
         let size = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
@@ -673,6 +851,7 @@ fn delete_recycle(paths: Vec<String>) -> DeleteReport {
             freed += sizes.get(path).copied().unwrap_or(0);
         }
     }
+    invalidate_dup_cache();
     delete_report(title, freed, deleted, failed, reasons)
 }
 
@@ -688,6 +867,11 @@ fn delete_dups(items: Vec<VerifyItem>) -> DeleteReport {
         if !Path::new(&path).exists() {
             failed.push(path.clone());
             reasons.push(format!("{}：文件已不存在", path));
+            continue;
+        }
+        if safety::explicit_delete_forbidden(&path) {
+            failed.push(path.clone());
+            reasons.push(format!("{}：受保护路径或密码库，已跳过", path));
             continue;
         }
         let Ok(meta) = std::fs::metadata(&path) else {
@@ -734,6 +918,7 @@ fn delete_dups(items: Vec<VerifyItem>) -> DeleteReport {
             freed += sizes.get(path).copied().unwrap_or(0);
         }
     }
+    invalidate_dup_cache();
     delete_report(title, freed, deleted, failed, reasons)
 }
 
@@ -748,25 +933,34 @@ fn clean_categories(keys: Vec<String>) -> CleanReport {
         notes: Vec::new(),
     };
     let rules = all_rules();
-    let by_key: HashMap<&str, &Rule> = rules
-        .iter()
-        .map(|rule| (rule.key.as_str(), rule))
-        .collect();
+    let by_key: HashMap<&str, &Rule> = rules.iter().map(|rule| (rule.key.as_str(), rule)).collect();
     for key in keys {
         let Some(rule) = by_key.get(key.as_str()) else {
             report.errors.push(format!("找不到清理项：{}", key));
             continue;
         };
-        let kind = if rule.kind.is_empty() { "files" } else { rule.kind.as_str() };
+        let kind = if rule.kind.is_empty() {
+            "files"
+        } else {
+            rule.kind.as_str()
+        };
         if kind != "files" {
             report.notes.push(format!(
                 "「{}」需要系统命令，Rust 版暂未迁移，已跳过",
-                if rule.name.is_empty() { key.clone() } else { rule.name.clone() }
+                if rule.name.is_empty() {
+                    key.clone()
+                } else {
+                    rule.name.clone()
+                }
             ));
             continue;
         }
         let mut roots = expand_paths(&rule.paths);
-        roots.extend(expand_paths(&rule.glob_dirs).into_iter().filter(|path| path.is_dir()));
+        roots.extend(
+            expand_paths(&rule.glob_dirs)
+                .into_iter()
+                .filter(|path| path.is_dir()),
+        );
         roots.sort();
         roots.dedup();
         if roots.is_empty() {
@@ -777,7 +971,11 @@ fn clean_categories(keys: Vec<String>) -> CleanReport {
             .map(|path| path.to_string_lossy().to_string())
             .collect();
         let include = build_matcher(&rule.patterns);
-        let excludes: Vec<String> = rule.exclude.iter().map(|item| normalize_exclude(item)).collect();
+        let excludes: Vec<String> = rule
+            .exclude
+            .iter()
+            .map(|item| normalize_exclude(item))
+            .collect();
         let exclude = build_matcher(&excludes);
         let min_age = Duration::from_secs(rule.min_age_minutes.saturating_mul(60));
 
@@ -787,10 +985,21 @@ fn clean_categories(keys: Vec<String>) -> CleanReport {
                 continue;
             }
             if Path::new(root).is_file() {
-                clean_one(root, &root_strings, &include, &exclude, min_age, &mut report);
+                clean_one(
+                    root,
+                    &root_strings,
+                    &include,
+                    &exclude,
+                    min_age,
+                    &mut report,
+                );
                 continue;
             }
-            for entry in WalkDir::new(root).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+            for entry in WalkDir::new(root)
+                .follow_links(false)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
                 if !entry.file_type().is_file() {
                     continue;
                 }
@@ -957,8 +1166,16 @@ fn history_read(name: String) -> Result<String, String> {
 #[tauri::command]
 fn rules_update() -> Result<String, String> {
     rules::update().map(|(added, total, note)| {
-        format!("新增 {} 条，共 {} 条。{}\n下次扫描生效。", added, total, note)
+        format!(
+            "新增 {} 条，共 {} 条。{}\n下次扫描生效。",
+            added, total, note
+        )
     })
+}
+
+#[tauri::command]
+fn rules_rollback() -> Result<String, String> {
+    rules::rollback()
 }
 
 // ---------- 用户目录 ----------
@@ -992,9 +1209,7 @@ fn ensure_admin() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    let wide = |text: &str| -> Vec<u16> {
-        text.encode_utf16().chain(std::iter::once(0)).collect()
-    };
+    let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(std::iter::once(0)).collect() };
     let verb = wide("runas");
     let file = wide(&exe.to_string_lossy());
     let result = unsafe {
@@ -1033,10 +1248,18 @@ fn run_selftest() {
     );
     let started = std::time::Instant::now();
     let big = scan_big(None);
-    println!("big: {} 个, 用时 {:.1}s", big.len(), started.elapsed().as_secs_f64());
+    println!(
+        "big: {} 个, 用时 {:.1}s",
+        big.len(),
+        started.elapsed().as_secs_f64()
+    );
     let started = std::time::Instant::now();
     let dups = scan_dups(Some("C:\\".to_string()), None);
-    println!("dups: {} 组, 用时 {:.1}s", dups.len(), started.elapsed().as_secs_f64());
+    println!(
+        "dups: {} 组, 用时 {:.1}s",
+        dups.len(),
+        started.elapsed().as_secs_f64()
+    );
     let started = std::time::Instant::now();
     let report = frag::analyze("C:\\");
     println!(
@@ -1074,7 +1297,9 @@ fn run_selftest() {
 
 fn main() {
     // 磁盘扫描是 I/O 密集操作，线程开太多反而被磁盘和杀毒软件拖垮。
-    let _ = rayon::ThreadPoolBuilder::new().num_threads(8).build_global();
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build_global();
     if std::env::args().any(|arg| arg == "--selftest") {
         run_selftest();
         return;
@@ -1084,6 +1309,8 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             disk_info,
+            scan_status,
+            cancel_scan,
             scan_categories,
             scan_big,
             scan_dups,
@@ -1101,6 +1328,7 @@ fn main() {
             history_list,
             history_read,
             rules_update,
+            rules_rollback,
             privacy_scan,
             privacy_clean
         ])

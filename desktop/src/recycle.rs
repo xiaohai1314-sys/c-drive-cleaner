@@ -3,6 +3,8 @@
 
 use std::ffi::c_void;
 
+use crate::safety;
+
 const FO_DELETE: u32 = 3;
 const FOF_ALLOWUNDO: u16 = 0x0040;
 const FOF_NOCONFIRMATION: u16 = 0x0010;
@@ -28,7 +30,18 @@ extern "system" {
 /// 返回没能送进回收站的路径。每批 40 个，和 Python 版一致。
 pub fn send_to_recycle(paths: &[String]) -> Vec<String> {
     let mut failed = Vec::new();
-    for chunk in paths.chunks(40) {
+    let mut eligible = Vec::new();
+    for path in paths {
+        let is_file = std::fs::metadata(path)
+            .map(|meta| meta.is_file())
+            .unwrap_or(false);
+        if !is_file || safety::explicit_delete_forbidden(path) {
+            failed.push(path.clone());
+        } else {
+            eligible.push(path.clone());
+        }
+    }
+    for chunk in eligible.chunks(40) {
         failed.extend(send_chunk(chunk));
     }
     failed

@@ -43,6 +43,8 @@ const state = {
   privacyLoading: false,
   privacyChecked: new Set(),
   shredPaths: [],
+  scanStatus: null,
+  scanPoll: null,
 };
 
 const IM_KINDS = {
@@ -121,6 +123,31 @@ function toast(text) {
   node.classList.add("show");
   clearTimeout(node._timer);
   node._timer = setTimeout(() => node.classList.remove("show"), 2200);
+}
+
+function startScanStatus() {
+  clearInterval(state.scanPoll);
+  state.scanPoll = setInterval(async () => {
+    try {
+      state.scanStatus = await invoke("scan_status");
+      if (state.page === "big") renderBig();
+      if (state.page === "dup") renderDup();
+    } catch (_) { /* 非 Tauri 预览模式忽略 */ }
+  }, 500);
+}
+
+function stopScanStatus() {
+  clearInterval(state.scanPoll);
+  state.scanPoll = null;
+  state.scanStatus = null;
+}
+
+async function cancelActiveScan(kind) {
+  try {
+    await invoke("cancel_scan", { kind });
+  } catch (error) {
+    toast("取消失败：" + error);
+  }
 }
 
 /* ---------- 侧栏 ---------- */
@@ -225,7 +252,7 @@ function renderClean() {
     : "正在读取磁盘信息…"));
   page.appendChild(row);
 
-  const recommended = state.categories.filter((cat) => !cat.requires_confirm && cat.tier !== "deep");
+  const recommended = state.categories.filter((cat) => cat.implemented !== false && !cat.requires_confirm && cat.tier !== "deep");
   const confirm = state.categories.filter((cat) => cat.requires_confirm || cat.tier === "deep");
   for (const [title, note, list] of [
     ["推荐清理项", "系统和软件的垃圾和无用文件，可放心清理", recommended],
@@ -245,7 +272,8 @@ function renderClean() {
     const grid = el("div", "cards");
     for (const cat of list) {
       const checked = state.selected.has(cat.key);
-      const card = el("div", "card" + (checked ? " checked" : ""));
+      const unsupported = cat.implemented === false;
+      const card = el("div", "card" + (checked ? " checked" : "") + (unsupported ? " unsupported" : ""));
       const icon = el("div", "card-icon", (cat.name || cat.key).slice(0, 1));
       icon.style.background = colorFor(cat.key);
       card.appendChild(icon);
@@ -253,8 +281,9 @@ function renderClean() {
       card.appendChild(el("div", "card-size", cat.size > 0 ? fmtSize(cat.size) : "—"));
       card.appendChild(el("div", "card-desc", cat.describe || ""));
       card.appendChild(el("div", "tick"));
-      card.title = (cat.describe || "") + (cat.warning ? "\n\n注意：" + cat.warning : "");
+      card.title = unsupported ? "该清理项需要系统命令，当前版本暂未迁移。" : (cat.describe || "") + (cat.warning ? "\n\n注意：" + cat.warning : "");
       card.addEventListener("click", () => {
+        if (unsupported) { toast("该项目暂未支持清理"); return; }
         if (state.selected.has(cat.key)) state.selected.delete(cat.key);
         else state.selected.add(cat.key);
         renderClean();
@@ -291,7 +320,7 @@ async function scanCategories() {
   state.scanningClean = false;
   // 默认勾选推荐项，和 Python 版一致。
   for (const cat of state.categories) {
-    if (!cat.requires_confirm && cat.tier !== "deep") state.selected.add(cat.key);
+    if (cat.implemented !== false && !cat.requires_confirm && cat.tier !== "deep") state.selected.add(cat.key);
   }
   renderClean();
   updateNavSizes();
@@ -436,9 +465,14 @@ function renderBig() {
   const btn = el("button", "green-btn", "一键清理");
   btn.addEventListener("click", () => deleteBig(btn));
   head.appendChild(btn);
+  if (state.bigLoading) {
+    const cancel = el("button", "gray-btn", "取消扫描");
+    cancel.addEventListener("click", () => cancelActiveScan("big"));
+    head.appendChild(cancel);
+  }
   page.appendChild(head);
   page.appendChild(el("div", "sub", state.bigLoading
-    ? "正在扫描各磁盘的大文件…"
+    ? `正在扫描各磁盘的大文件…${state.scanStatus?.big?.cancelled ? " 正在停止" : ""}`
     : "扫描磁盘中大于 100 MB 的文件，删除前会先预览"));
 
   const totals = { all: 0 };
@@ -491,6 +525,7 @@ function renderBig() {
 
 async function scanBig() {
   state.bigLoading = true;
+  startScanStatus();
   renderBig();
   try {
     state.big = await invoke("scan_big");
@@ -499,6 +534,7 @@ async function scanBig() {
     toast("扫描失败：" + error);
   }
   state.bigLoading = false;
+  stopScanStatus();
   renderBig();
   updateNavSizes();
 }
@@ -518,9 +554,14 @@ function renderDup() {
   const btn = el("button", "green-btn", "一键清理");
   btn.addEventListener("click", () => deleteDups(btn));
   head.appendChild(btn);
+  if (state.dupLoading) {
+    const cancel = el("button", "gray-btn", "取消扫描");
+    cancel.addEventListener("click", () => cancelActiveScan("dup"));
+    head.appendChild(cancel);
+  }
   page.appendChild(head);
   page.appendChild(el("div", "sub", state.dupLoading
-    ? "正在查找重复文件…（默认只扫 C 盘）"
+    ? `正在查找重复文件…${state.scanStatus?.dup?.cancelled ? " 正在停止" : "（默认只扫 C 盘）"}`
     : `每组自动保留一份，已勾选 ${state.dupChecked.size} 个副本`));
 
   const scopes = [["C:\\", "C盘"], ["USER", "用户目录"], ["ALL", "全部磁盘"]];
@@ -596,6 +637,7 @@ function pickKeeper(group) {
 
 async function scanDup() {
   state.dupLoading = true;
+  startScanStatus();
   renderDup();
   try {
     const root = state.dupScope === "C:\\" ? "C:\\"
@@ -612,6 +654,7 @@ async function scanDup() {
     toast("扫描失败：" + error);
   }
   state.dupLoading = false;
+  stopScanStatus();
   renderDup();
   updateNavSizes();
 }
@@ -1016,6 +1059,15 @@ async function updateRules() {
   }
 }
 
+async function rollbackRules() {
+  try {
+    const message = await invoke("rules_rollback");
+    await showResult("规则回滚", [message, "下次扫描生效。"]);
+  } catch (error) {
+    await showResult("规则回滚", [String(error)]);
+  }
+}
+
 /* ---------- 删除执行 ---------- */
 async function cleanSelected(button) {
   const chosen = state.categories.filter((cat) => state.selected.has(cat.key));
@@ -1169,6 +1221,10 @@ function bindWindowButtons() {
   $("#rules-link")?.addEventListener("click", (event) => {
     event.preventDefault();
     updateRules();
+  });
+  $("#rules-rollback-link")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    rollbackRules();
   });
 }
 

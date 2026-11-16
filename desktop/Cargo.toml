@@ -1,9 +1,10 @@
 [package]
 name = "c-drive-cleaner"
 version = "0.1.0"
-description = "C 盘清理工具 Tauri 前端"
+description = "C盘清理工具 Tauri 前端"
 edition = "2021"
 rust-version = "1.77"
+license = "MIT"
 
 [[bin]]
 name = "c-drive-cleaner"

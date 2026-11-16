@@ -1,7 +1,7 @@
-# Tauri 桌面版（Rust 前端）
+# C 盘清理工具（Rust + Tauri）
 
-这是「C盘清理工具」的 Rust + Tauri 重写版本，和根目录的 Python 版并存、互不影响。
-Python 版继续可用，Rust 版按页面逐步迁移。
+Windows 下的图形化 C 盘清理工具。Rust 负责扫描、删除、粉碎和隐私清理，
+界面是纯静态 HTML/CSS/JS，不引入 Node 构建链。
 
 ## 目录
 
@@ -28,7 +28,7 @@ ui/                    前端（纯 HTML/CSS/JS，无 Node 构建链）
 - 重复文件专清：默认只扫 C 盘，跳过系统目录，采样哈希 + 全文件哈希（Rust 并行），按组显示保留项，删除前重新核对内容
 - 微信 / QQ 专清：按目录语义分类聊天视频/图片/语音/接收文件/缓存/日志/朋友圈，按月分组，默认勾选缓存和日志，清理走回收站
 - 文件粉碎：随机数据覆盖写入后删除，拒绝系统目录、受保护路径和链接；目录逐个文件粉碎后清空
-- 清理历史：每次清理写 `logs/YYYYMMDD_HHMMSS.log`，侧栏「清理历史」查看
+- 清理历史：每次清理写 `%LOCALAPPDATA%\C盘清理工具\logs\YYYYMMDD_HHMMSS.log`，侧栏「清理历史」查看
 - 规则更新：从 `rules_update.json` 里的 https 地址拉取规则，校验后保存到 `%LOCALAPPDATA%\C盘清理工具\rules_remote.json`，下次扫描合并
 
 ## 删除安全
@@ -47,11 +47,12 @@ ui/                    前端（纯 HTML/CSS/JS，无 Node 构建链）
 - 隐私清理不碰浏览器密码库；注册表项删除前先导出 `.reg` 备份，导出失败就跳过
 - 文件粉碎不可恢复，界面有二次确认；系统目录、受保护路径和链接一律拒绝
 
-## 与 Python 版的已知差异
+## 已知限制
 
 - USB 使用痕迹只统计不清理（改系统设备记录风险高）
-- 隐私清理的「电脑搜索记录」没有迁移；其余浏览器/注册表/媒体痕迹已覆盖
+- 「电脑搜索记录」没有实现；浏览器/注册表/媒体痕迹已覆盖
 - 规则更新保存到 `%LOCALAPPDATA%`，不改动程序内置的 `rules.json`
+- 需要系统命令的清理项（DISM、事件日志、搜索索引、注册表残留）会提示「暂未迁移」
 
 ## 当前状态（2026-11-13 实测，调试构建）
 
@@ -84,14 +85,20 @@ cargo build --release  # 发布版
 > 编译特别慢时，通常是杀毒软件在逐个扫描 `target` 目录。把 `desktop/target` 和
 > `C:\Users\Administrator\.cargo` 加入杀毒软件的信任目录可以快很多。
 
-## 和 Python 版的对应关系
+## 模块职责
 
-| Python | Rust |
+| 功能 | 实现 |
 |---|---|
-| `categories.get_categories()` + `scanner.scan_category` | `scan_categories`（解析 `rules.json`，展开环境变量与通配符，按规则遍历） |
-| `fastscan.iter_files` + `scanner.scan_large_files` | `scan_big`（调用 `mftreader.exe`，多盘并行） |
-| `dupes.find_duplicates` | `scan_dups`（rayon 并行采样/全文件哈希） |
-| `main.py` 的 Tkinter 界面 | `ui/` + `src/main.rs` |
+| 清理项统计 | `scan_categories`：解析 `rules.json`，展开环境变量与通配符，按规则遍历 |
+| 大文件 | `scan_big`：调用 `mftreader.exe` 解析 NTFS `$MFT`，多盘并行 |
+| 重复文件 | `scan_dups`：采样哈希 + 全文件哈希（BLAKE3，rayon 并行） |
+| 微信 / QQ | `im.rs`：按目录语义分类，清理走回收站 |
+| 碎片清理 | `frag.rs`：调用 `defrag.exe` 分析/优化，识别固态盘 |
+| 隐私清理 | `privacy.rs`：浏览器 SQLite、最近文件、注册表痕迹 |
+| 文件粉碎 | `shred.rs`：随机覆盖后按句柄删除 |
+| 清理历史 | `logs.rs`：每次清理写 `%LOCALAPPDATA%\C盘清理工具\logs\YYYYMMDD_HHMMSS.log` |
+| 规则更新 | `rules.rs`：https 拉取、校验、保存到 `%LOCALAPPDATA%` |
+| 路径安全 | `safety.rs`：永不清理名单、受保护路径、重解析点检查、按句柄删除 |
 
 ## 说明
 

@@ -20,15 +20,32 @@ const KEY_READ: u32 = 0x0002_0019;
 const KEY_ALL_ACCESS: u32 = 0x000F_003F;
 
 const SHOP_DOMAINS: [&str; 10] = [
-    "taobao.com", "tmall.com", "jd.com", "yangkeduo.com", "pinduoduo.com",
-    "amazon.com", "amazon.cn", "smzdm.com", "suning.com", "dangdang.com",
+    "taobao.com",
+    "tmall.com",
+    "jd.com",
+    "yangkeduo.com",
+    "pinduoduo.com",
+    "amazon.com",
+    "amazon.cn",
+    "smzdm.com",
+    "suning.com",
+    "dangdang.com",
 ];
 const FINANCE_DOMAINS: [&str; 7] = [
-    "alipay.com", "paypal.com", "icbc.com.cn", "ccb.com", "cmbchina.com",
-    "unionpay.com", "abchina.com",
+    "alipay.com",
+    "paypal.com",
+    "icbc.com.cn",
+    "ccb.com",
+    "cmbchina.com",
+    "unionpay.com",
+    "abchina.com",
 ];
 const MEDICAL_DOMAINS: [&str; 5] = [
-    "haodf.com", "dxy.cn", "xywy.com", "chunyuyisheng.com", "guahao.com",
+    "haodf.com",
+    "dxy.cn",
+    "xywy.com",
+    "chunyuyisheng.com",
+    "guahao.com",
 ];
 const SENSITIVE_WORDS: [&str; 6] = ["身份证", "密码", "银行卡", "合同", "护照", "工资"];
 const RECENT_MEDIA_EXT: [&str; 7] = [".mp4", ".mkv", ".avi", ".mp3", ".flac", ".wav", ".mov"];
@@ -118,7 +135,11 @@ fn browser_specs() -> Vec<BrowserSpec> {
         ("edge", "Edge", "\\Microsoft\\Edge\\User Data"),
         ("qqbrowser", "QQ浏览器", "\\Tencent\\QQBrowser\\User Data"),
         ("quark", "夸克浏览器", "\\Quark\\User Data"),
-        ("brave", "Brave", "\\BraveSoftware\\Brave-Browser\\User Data"),
+        (
+            "brave",
+            "Brave",
+            "\\BraveSoftware\\Brave-Browser\\User Data",
+        ),
     ] {
         let root = format!("{}{}", local, suffix);
         if Path::new(&root).is_dir() {
@@ -182,7 +203,10 @@ fn cookie_files(spec: &BrowserSpec, profile: &Path) -> Vec<PathBuf> {
         }
         return files;
     }
-    for path in [profile.join("Cookies"), profile.join("Network").join("Cookies")] {
+    for path in [
+        profile.join("Cookies"),
+        profile.join("Network").join("Cookies"),
+    ] {
         if path.is_file() && !safety::is_password_store(&path.to_string_lossy()) {
             files.push(path);
         }
@@ -195,7 +219,16 @@ fn connect_copy(path: &Path) -> Option<(Connection, PathBuf)> {
         return None;
     }
     let stamp = timeutil::stamp();
-    let tmp = std::env::temp_dir().join(format!("cdc-privacy-{}-{}.db", stamp, std::process::id()));
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!(
+        "cdc-privacy-{}-{}-{}.db",
+        stamp,
+        std::process::id(),
+        nonce
+    ));
     std::fs::copy(path, &tmp).ok()?;
     let connection = Connection::open(&tmp).ok()?;
     Some((connection, tmp))
@@ -213,12 +246,19 @@ fn domain_count(connection: &Connection, table: &str, domains: &[&str]) -> Optio
         .map(|_| "url LIKE ?")
         .collect::<Vec<_>>()
         .join(" OR ");
-    let patterns: Vec<String> = domains.iter().map(|domain| format!("%{}%", domain)).collect();
+    let patterns: Vec<String> = domains
+        .iter()
+        .map(|domain| format!("%{}%", domain))
+        .collect();
     let params: Vec<&dyn rusqlite::ToSql> = patterns
         .iter()
         .map(|pattern| pattern as &dyn rusqlite::ToSql)
         .collect();
-    count(connection, &format!("SELECT COUNT(*) FROM {} WHERE {}", table, clause), &params)
+    count(
+        connection,
+        &format!("SELECT COUNT(*) FROM {} WHERE {}", table, clause),
+        &params,
+    )
 }
 
 struct HistoryStats {
@@ -311,7 +351,10 @@ fn domain_sql(domains: &[&str]) -> Vec<String> {
         .collect::<Vec<_>>()
         .join(" OR ");
     vec![
-        format!("DELETE FROM visits WHERE url IN (SELECT id FROM urls WHERE {})", likes),
+        format!(
+            "DELETE FROM visits WHERE url IN (SELECT id FROM urls WHERE {})",
+            likes
+        ),
         format!("DELETE FROM urls WHERE {}", likes),
         format!("DELETE FROM moz_places WHERE {}", likes),
     ]
@@ -427,7 +470,11 @@ fn clear_values(hive: &str, path: &str, label: &str) -> i64 {
     if !backup_key(hive, path, label) {
         return 0;
     }
-    let root = if hive == "HKLM" { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+    let root = if hive == "HKLM" {
+        HKEY_LOCAL_MACHINE
+    } else {
+        HKEY_CURRENT_USER
+    };
     let Some(key) = reg_open(root, path, KEY_ALL_ACCESS) else {
         return 0;
     };
@@ -444,7 +491,11 @@ fn clear_values(hive: &str, path: &str, label: &str) -> i64 {
 }
 
 fn count_values(hive: &str, path: &str) -> Option<i64> {
-    let root = if hive == "HKLM" { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+    let root = if hive == "HKLM" {
+        HKEY_LOCAL_MACHINE
+    } else {
+        HKEY_CURRENT_USER
+    };
     let key = reg_open(root, path, KEY_READ)?;
     let total = list_values(key).len() as i64;
     unsafe { RegCloseKey(key) };
@@ -452,7 +503,11 @@ fn count_values(hive: &str, path: &str) -> Option<i64> {
 }
 
 fn count_subkeys(hive: &str, path: &str) -> Option<i64> {
-    let root = if hive == "HKLM" { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER };
+    let root = if hive == "HKLM" {
+        HKEY_LOCAL_MACHINE
+    } else {
+        HKEY_CURRENT_USER
+    };
     let key = reg_open(root, path, KEY_READ)?;
     let total = list_subkeys(key).len() as i64;
     unsafe { RegCloseKey(key) };
@@ -592,7 +647,10 @@ pub fn scan() -> Vec<PrivacyItem> {
     let sensitive: Vec<String> = recent
         .iter()
         .filter(|path| {
-            let name = path.file_name().map(|value| value.to_string_lossy().to_string()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_default();
             SENSITIVE_WORDS.iter().any(|word| name.contains(word))
         })
         .map(|path| path.to_string_lossy().to_string())
@@ -693,15 +751,18 @@ pub fn scan() -> Vec<PrivacyItem> {
             userassist += value;
         }
     }
-    let prefetch = format!(
-        "{}\\Prefetch",
-        env_path("SystemRoot")
-    );
+    let prefetch = format!("{}\\Prefetch", env_path("SystemRoot"));
     let prefetch_count = std::fs::read_dir(&prefetch)
         .map(|entries| {
             entries
                 .flatten()
-                .filter(|entry| entry.file_name().to_string_lossy().to_lowercase().ends_with(".pf"))
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .ends_with(".pf")
+                })
                 .count() as i64
         })
         .unwrap_or(0);
@@ -719,7 +780,10 @@ pub fn scan() -> Vec<PrivacyItem> {
     let media_files: Vec<String> = recent
         .iter()
         .filter(|path| {
-            let stem = path.file_stem().map(|value| value.to_string_lossy().to_string()).unwrap_or_default();
+            let stem = path
+                .file_stem()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_default();
             let ext = Path::new(&stem)
                 .extension()
                 .map(|value| format!(".{}", value.to_string_lossy().to_lowercase()))
@@ -730,9 +794,15 @@ pub fn scan() -> Vec<PrivacyItem> {
         .collect();
     let wmp = count_values("HKCU", WMP_RECENT).unwrap_or(0);
     let vlc = std::fs::read_to_string(
-        PathBuf::from(env_path("APPDATA")).join("vlc").join("vlc-qt-interface.ini"),
+        PathBuf::from(env_path("APPDATA"))
+            .join("vlc")
+            .join("vlc-qt-interface.ini"),
     )
-    .map(|text| text.lines().filter(|line| line.to_lowercase().contains("file:///")).count() as i64)
+    .map(|text| {
+        text.lines()
+            .filter(|line| line.to_lowercase().contains("file:///"))
+            .count() as i64
+    })
     .unwrap_or(0);
     let media = vec![PrivacyItem {
         id: "media".to_string(),
@@ -775,7 +845,11 @@ pub fn clean(ids: Vec<String>) -> PrivacyReport {
     for item in &selected {
         match item.action.as_str() {
             "sql" => {
-                let kind = item.id.trim_start_matches("hist_").trim_start_matches("down_").trim_start_matches("shop_");
+                let kind = item
+                    .id
+                    .trim_start_matches("hist_")
+                    .trim_start_matches("down_")
+                    .trim_start_matches("shop_");
                 let statements = match item.id.as_str() {
                     "risk_money" => sql_statements("money"),
                     "risk_shop" => sql_statements("shop"),
@@ -802,7 +876,10 @@ pub fn clean(ids: Vec<String>) -> PrivacyReport {
                     for profile in profiles(&spec) {
                         if item.id == "cookies" {
                             for cookie in cookie_files(&spec, &profile) {
-                                sql_jobs.push((cookie.to_string_lossy().to_string(), statements.clone()));
+                                sql_jobs.push((
+                                    cookie.to_string_lossy().to_string(),
+                                    statements.clone(),
+                                ));
                             }
                             continue;
                         }
@@ -814,7 +891,10 @@ pub fn clean(ids: Vec<String>) -> PrivacyReport {
                                 || item.id.starts_with("down_")
                                 || item.id.starts_with("shop_")
                             {
-                                sql_jobs.push((history.to_string_lossy().to_string(), statements.clone()));
+                                sql_jobs.push((
+                                    history.to_string_lossy().to_string(),
+                                    statements.clone(),
+                                ));
                             }
                         }
                     }
@@ -849,7 +929,9 @@ pub fn clean(ids: Vec<String>) -> PrivacyReport {
         if apply_sql(Path::new(&path), &statements) {
             report.sql += 1;
         } else {
-            report.failed.push(format!("数据库清理失败或数据源不可用：{}", path));
+            report
+                .failed
+                .push(format!("数据库清理失败或数据源不可用：{}", path));
         }
     }
 
@@ -861,7 +943,9 @@ pub fn clean(ids: Vec<String>) -> PrivacyReport {
             }
             report.registry += deleted;
             if deleted == 0 {
-                report.failed.push("文件访问记录清理未完成：没有记录被清除".to_string());
+                report
+                    .failed
+                    .push("文件访问记录清理未完成：没有记录被清除".to_string());
             }
         }
     }
@@ -873,7 +957,9 @@ pub fn clean(ids: Vec<String>) -> PrivacyReport {
         }
         report.registry += deleted;
         if deleted == 0 {
-            report.failed.push("软件使用痕迹清理未完成：没有记录被清除".to_string());
+            report
+                .failed
+                .push("软件使用痕迹清理未完成：没有记录被清除".to_string());
         }
     }
 

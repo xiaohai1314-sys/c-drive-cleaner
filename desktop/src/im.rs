@@ -8,34 +8,59 @@ use crate::recycle;
 use crate::timeutil;
 
 const VIDEO_EXT: [&str; 15] = [
-    ".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".m4v", ".3gp", ".mpeg",
-    ".mpg", ".ts", ".webm", ".rmvb", ".vob", ".m2ts",
+    ".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".m4v", ".3gp", ".mpeg", ".mpg", ".ts",
+    ".webm", ".rmvb", ".vob", ".m2ts",
 ];
 const IMAGE_EXT: [&str; 14] = [
-    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic", ".tif", ".tiff",
-    ".ico", ".raw", ".psd", ".svg", ".jfif",
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic", ".tif", ".tiff", ".ico", ".raw",
+    ".psd", ".svg", ".jfif",
 ];
-const AUDIO_EXT: [&str; 8] = [".silk", ".amr", ".mp3", ".m4a", ".wav", ".ogg", ".aac", ".aud"];
+const AUDIO_EXT: [&str; 8] = [
+    ".silk", ".amr", ".mp3", ".m4a", ".wav", ".ogg", ".aac", ".aud",
+];
 const DOC_EXT: [&str; 18] = [
-    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv",
-    ".rtf", ".ofd", ".md", ".wps", ".et", ".dps", ".dwg", ".dxf", ".xmind",
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv", ".rtf", ".ofd",
+    ".md", ".wps", ".et", ".dps", ".dwg", ".dxf", ".xmind",
 ];
-const ARCHIVE_EXT: [&str; 9] = [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".cab"];
+const ARCHIVE_EXT: [&str; 9] = [
+    ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".cab",
+];
 const FILE_EXT: [&str; 2] = [".psd", ".ai"];
 const SKIP_EXT: [&str; 14] = [
-    ".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3", ".ini", ".key", ".xml",
-    ".json", ".pfx", ".crt", ".exe", ".dll", ".cfg",
+    ".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3", ".ini", ".key", ".xml", ".json", ".pfx",
+    ".crt", ".exe", ".dll", ".cfg",
 ];
 const SKIP_DIR_PARTS: [&str; 8] = [
-    "db_storage", "config", "account", "apputil", "login", "db", "database", "databases",
+    "db_storage",
+    "config",
+    "account",
+    "apputil",
+    "login",
+    "db",
+    "database",
+    "databases",
 ];
 
 const MEDIA_DIRS: [(&str, &[&str]); 7] = [
     ("sns", &["sns", "moments", "timeline"]),
     ("video", &["video", "videos"]),
-    ("image", &["image", "images", "img", "attach", "msgattach", "custom_emotion", "emotion"]),
+    (
+        "image",
+        &[
+            "image",
+            "images",
+            "img",
+            "attach",
+            "msgattach",
+            "custom_emotion",
+            "emotion",
+        ],
+    ),
     ("audio", &["voice", "audio", "ptt", "sound"]),
-    ("file", &["file", "files", "filerecv", "file_recv", "fav", "favorite"]),
+    (
+        "file",
+        &["file", "files", "filerecv", "file_recv", "fav", "favorite"],
+    ),
     ("log", &["log", "logs", "xlog", "crash", "crashinfo"]),
     ("cache", &["cache", "temp", "emoji", "emoticon", "cdncomm"]),
 ];
@@ -146,7 +171,10 @@ pub fn classify(path: &str, root: Option<&str>) -> Option<(String, String)> {
         return None;
     }
     let dirs = &parts[..parts.len() - 1];
-    if dirs.iter().any(|dir| SKIP_DIR_PARTS.contains(&dir.as_str())) {
+    if dirs
+        .iter()
+        .any(|dir| SKIP_DIR_PARTS.contains(&dir.as_str()))
+    {
         return None;
     }
     let kind = if let Some(dir_kind) = dir_kind(dirs) {
@@ -241,7 +269,9 @@ pub fn clean(kind: &str, kinds: &[String], paths: Option<Vec<String>>) -> crate:
                 if path.trim().is_empty() || !crate::safety::is_within(&path, &roots) {
                     continue;
                 }
-                if crate::safety::is_password_store(&path) || crate::safety::is_protected_path(&path) {
+                if crate::safety::is_password_store(&path)
+                    || crate::safety::is_protected_path(&path)
+                {
                     continue;
                 }
                 let root = roots
@@ -255,7 +285,9 @@ pub fn clean(kind: &str, kinds: &[String], paths: Option<Vec<String>>) -> crate:
                 if !kinds.contains(&record_kind) {
                     continue;
                 }
-                let Ok(meta) = std::fs::metadata(&path) else { continue };
+                let Ok(meta) = std::fs::metadata(&path) else {
+                    continue;
+                };
                 let mtime = meta
                     .modified()
                     .ok()
@@ -300,6 +332,7 @@ pub fn clean(kind: &str, kinds: &[String], paths: Option<Vec<String>>) -> crate:
             deleted += 1;
         }
     }
+    crate::invalidate_dup_cache();
     let _ = crate::logs::write_log(&[
         "开始清理".to_string(),
         format!("清理：{}", if kind == "wechat" { "微信" } else { "QQ" }),
@@ -353,9 +386,17 @@ mod tests {
 
     #[test]
     fn classifies_plain_media_without_directory_hint() {
-        let (kind, sub) = classify("C:\\Users\\u\\Documents\\WeChat Files\\x\\a.pdf", Some("C:\\Users\\u\\Documents\\WeChat Files")).unwrap();
+        let (kind, sub) = classify(
+            "C:\\Users\\u\\Documents\\WeChat Files\\x\\a.pdf",
+            Some("C:\\Users\\u\\Documents\\WeChat Files"),
+        )
+        .unwrap();
         assert_eq!(kind, "file");
         assert_eq!(sub, "doc");
-        assert!(classify("C:\\Users\\u\\Documents\\WeChat Files\\x\\a.unknownext", Some("C:\\Users\\u\\Documents\\WeChat Files")).is_none());
+        assert!(classify(
+            "C:\\Users\\u\\Documents\\WeChat Files\\x\\a.unknownext",
+            Some("C:\\Users\\u\\Documents\\WeChat Files")
+        )
+        .is_none());
     }
 }

@@ -43,8 +43,16 @@ const NEVER_CLEAN_ROOTS: [&str; 2] = ["\\recovery", "\\system volume information
 const NEVER_CLEAN_FILES: [&str; 1] = ["usmt.ppkg"];
 
 const LIBRARY_NAMES: [&str; 10] = [
-    "documents", "desktop", "downloads", "my documents", "文档",
-    "桌面", "下载", "pictures", "music", "videos",
+    "documents",
+    "desktop",
+    "downloads",
+    "my documents",
+    "文档",
+    "桌面",
+    "下载",
+    "pictures",
+    "music",
+    "videos",
 ];
 
 #[repr(C)]
@@ -90,7 +98,9 @@ pub fn normalize(path: &str) -> String {
         if !rest.starts_with('\\') {
             rest.insert(0, '\\');
         }
-        return format!("{}{}", drive, rest).trim_end_matches('\\').to_string();
+        return format!("{}{}", drive, rest)
+            .trim_end_matches('\\')
+            .to_string();
     }
     text.trim_end_matches(['\\', '/']).to_string()
 }
@@ -126,7 +136,9 @@ pub fn under_marker(path: &str, markers: &[&str]) -> bool {
 pub fn is_drive_root(path: &str) -> bool {
     let norm = normalize(path);
     (norm.len() == 2 && norm.as_bytes()[1] == b':')
-        || (norm.len() == 3 && norm.as_bytes()[1] == b':' && (norm.ends_with('\\') || norm.ends_with('/')))
+        || (norm.len() == 3
+            && norm.as_bytes()[1] == b':'
+            && (norm.ends_with('\\') || norm.ends_with('/')))
 }
 
 pub fn is_critical_file(path: &str) -> bool {
@@ -171,7 +183,13 @@ pub fn path_syntax_error(path: &str) -> bool {
 
 fn env_roots() -> Vec<String> {
     let mut roots = Vec::new();
-    for name in ["SystemRoot", "WINDIR", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"] {
+    for name in [
+        "SystemRoot",
+        "WINDIR",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramData",
+    ] {
         if let Ok(value) = std::env::var(name) {
             roots.push(normalize(&value).to_lowercase());
         }
@@ -185,14 +203,26 @@ pub fn is_system_path(path: &str) -> bool {
     }
     if under_marker(
         path,
-        &["\\windows", "\\system volume information", "\\recovery", "\\boot", "\\$recycle.bin"],
+        &[
+            "\\windows",
+            "\\system volume information",
+            "\\recovery",
+            "\\boot",
+            "\\$recycle.bin",
+        ],
     ) {
         return true;
     }
-    let target = normalize(path).to_lowercase().trim_end_matches(['\\', '/']).to_string();
+    let target = normalize(path)
+        .to_lowercase()
+        .trim_end_matches(['\\', '/'])
+        .to_string();
     for key in ["SystemRoot", "WINDIR"] {
         if let Ok(value) = std::env::var(key) {
-            let root = normalize(&value).to_lowercase().trim_end_matches(['\\', '/']).to_string();
+            let root = normalize(&value)
+                .to_lowercase()
+                .trim_end_matches(['\\', '/'])
+                .to_string();
             if !root.is_empty() && (target == root || target.starts_with(&format!("{}\\", root))) {
                 return true;
             }
@@ -207,11 +237,19 @@ pub fn is_protected_path(path: &str) -> bool {
     }
     if under_marker(
         path,
-        &["\\program files", "\\program files (x86)", "\\programdata", "\\perflogs"],
+        &[
+            "\\program files",
+            "\\program files (x86)",
+            "\\programdata",
+            "\\perflogs",
+        ],
     ) {
         return true;
     }
-    let target = normalize(path).to_lowercase().trim_end_matches(['\\', '/']).to_string();
+    let target = normalize(path)
+        .to_lowercase()
+        .trim_end_matches(['\\', '/'])
+        .to_string();
     for root in env_roots() {
         let root = root.trim_end_matches(['\\', '/']);
         if !root.is_empty() && (target == root || target.starts_with(&format!("{}\\", root))) {
@@ -219,7 +257,11 @@ pub fn is_protected_path(path: &str) -> bool {
         }
     }
     if let Ok(profile) = std::env::var("USERPROFILE") {
-        if target == normalize(&profile).to_lowercase().trim_end_matches(['\\', '/']) {
+        if target
+            == normalize(&profile)
+                .to_lowercase()
+                .trim_end_matches(['\\', '/'])
+        {
             return true;
         }
     }
@@ -233,12 +275,24 @@ pub fn user_library_roots() -> Vec<String> {
             bases.push(value);
         }
     }
-    let names = ["Documents", "Desktop", "Downloads", "My Documents", "文档",
-                 "桌面", "下载", "Pictures", "Music", "Videos"];
+    let names = [
+        "Documents",
+        "Desktop",
+        "Downloads",
+        "My Documents",
+        "文档",
+        "桌面",
+        "下载",
+        "Pictures",
+        "Music",
+        "Videos",
+    ];
     let mut roots = Vec::new();
     for base in bases {
         for name in names {
-            roots.push(normalize(&format!("{}\\{}", base.trim_end_matches('\\'), name)).to_lowercase());
+            roots.push(
+                normalize(&format!("{}\\{}", base.trim_end_matches('\\'), name)).to_lowercase(),
+            );
         }
     }
     roots
@@ -248,7 +302,10 @@ pub fn is_user_library(path: &str) -> bool {
     if path.trim().is_empty() {
         return false;
     }
-    let target = normalize(path).to_lowercase().trim_end_matches('\\').to_string();
+    let target = normalize(path)
+        .to_lowercase()
+        .trim_end_matches('\\')
+        .to_string();
     for root in user_library_roots() {
         let root = root.trim_end_matches('\\');
         if target == root || target.starts_with(&format!("{}\\", root)) {
@@ -256,7 +313,11 @@ pub fn is_user_library(path: &str) -> bool {
         }
     }
     let text = tail(path);
-    let parts: Vec<&str> = text.trim_start_matches('\\').split('\\').filter(|p| !p.is_empty()).collect();
+    let parts: Vec<&str> = text
+        .trim_start_matches('\\')
+        .split('\\')
+        .filter(|p| !p.is_empty())
+        .collect();
     if parts.len() >= 3 && parts[0] == "users" && LIBRARY_NAMES.contains(&parts[2]) {
         return true;
     }
@@ -270,9 +331,15 @@ pub fn is_within(path: &str, roots: &[String]) -> bool {
     if roots.is_empty() {
         return false;
     }
-    let target = normalize(path).to_lowercase().trim_end_matches(['\\', '/']).to_string();
+    let target = normalize(path)
+        .to_lowercase()
+        .trim_end_matches(['\\', '/'])
+        .to_string();
     for root in roots {
-        let base = normalize(root).to_lowercase().trim_end_matches(['\\', '/']).to_string();
+        let base = normalize(root)
+            .to_lowercase()
+            .trim_end_matches(['\\', '/'])
+            .to_string();
         if base.is_empty() {
             continue;
         }
@@ -411,7 +478,9 @@ fn known_appdata_target(path: &str) -> bool {
         if !(target == root || target.starts_with(&format!("{}\\", root))) {
             continue;
         }
-        let relative = target[root.len()..].trim_start_matches(['\\', '/']).to_string();
+        let relative = target[root.len()..]
+            .trim_start_matches(['\\', '/'])
+            .to_string();
         if catalog_matches(&split_parts(&relative), key) {
             return true;
         }
@@ -464,6 +533,27 @@ pub fn execution_forbidden(path: &str, untrusted: bool) -> bool {
         return true;
     }
     false
+}
+
+/// 用户主动勾选删除（大文件、重复副本、微信文件、粉碎）时的检查。
+///
+/// 和 `execution_forbidden` 的区别：允许文档、桌面、下载这些用户目录——
+/// 用户勾选的大文件和聊天文件本来就在那里；系统目录、Program Files、
+/// 密码库、盘符根、关键系统文件、永不清理名单和重解析点仍然拦住。
+pub fn explicit_delete_forbidden(path: &str) -> bool {
+    if path_syntax_error(path) {
+        return true;
+    }
+    if is_never_clean(path) {
+        return true;
+    }
+    if is_reparse_point(path) || Path::new(path).is_symlink() {
+        return true;
+    }
+    if is_password_store(path) || is_drive_root(path) || is_critical_file(path) {
+        return true;
+    }
+    is_protected_path(path)
 }
 
 /// 按句柄删除普通文件：打开时带 OPEN_REPARSE_POINT，确认不是链接和目录后
@@ -556,7 +646,9 @@ pub fn remove_empty_dirs(root: &str) -> usize {
             continue;
         };
         for entry in entries.flatten() {
-            let Ok(file_type) = entry.file_type() else { continue };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
             if !file_type.is_dir() || file_type.is_symlink() {
                 continue;
             }
@@ -594,7 +686,10 @@ mod tests {
         // 内置项（trusted）可以清 Windows\Temp，所以系统路径只在不可信规则下拦；
         // 规则文件里的外置规则一律按不可信处理。
         assert!(is_system_path("C:\\Windows\\System32\\kernel32.dll"));
-        assert!(execution_forbidden("C:\\Windows\\System32\\kernel32.dll", true));
+        assert!(execution_forbidden(
+            "C:\\Windows\\System32\\kernel32.dll",
+            true
+        ));
         assert!(!execution_forbidden("C:\\Windows\\Temp\\a.tmp", false));
         assert!(execution_forbidden("C:\\pagefile.sys", false));
         assert!(execution_forbidden("C:\\Program Files\\App\\a.dll", true));
@@ -624,12 +719,21 @@ mod tests {
         let roots = vec![dir.to_string_lossy().to_string()];
 
         // 不在允许的根目录里：必须跳过。
-        let other = vec![std::env::temp_dir().join("cdc-other").to_string_lossy().to_string()];
-        assert!(matches!(delete_file_checked(&path, &other, true), DeleteOutcome::Skipped));
+        let other = vec![std::env::temp_dir()
+            .join("cdc-other")
+            .to_string_lossy()
+            .to_string()];
+        assert!(matches!(
+            delete_file_checked(&path, &other, true),
+            DeleteOutcome::Skipped
+        ));
         assert!(Path::new(&path).exists());
 
         // 在根目录里、位于 Temp 下：允许删除。
-        assert!(matches!(delete_file_checked(&path, &roots, true), DeleteOutcome::Deleted));
+        assert!(matches!(
+            delete_file_checked(&path, &roots, true),
+            DeleteOutcome::Deleted
+        ));
         assert!(!Path::new(&path).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -637,10 +741,36 @@ mod tests {
     #[test]
     fn user_library_and_system_detection() {
         assert!(is_system_path("C:\\Windows\\Temp"));
-        assert!(!is_system_path("C:\\Users\\Administrator\\AppData\\Local\\Temp"));
+        assert!(!is_system_path(
+            "C:\\Users\\Administrator\\AppData\\Local\\Temp"
+        ));
         assert!(is_within(
             "C:\\Users\\Administrator\\AppData\\Local\\Temp\\a\\b.txt",
             &["C:\\Users\\Administrator\\AppData\\Local\\Temp".to_string()]
         ));
+    }
+
+    #[test]
+    fn explicit_delete_allows_user_folders_but_blocks_system() {
+        let profile = std::env::var("USERPROFILE").unwrap_or_default();
+        // 用户勾选的大文件/聊天文件通常在下载、文档里，必须允许。
+        assert!(!explicit_delete_forbidden(&format!(
+            "{}\\Downloads\\movie.mp4",
+            profile
+        )));
+        assert!(!explicit_delete_forbidden(&format!(
+            "{}\\Documents\\WeChat Files\\a.jpg",
+            profile
+        )));
+        // 系统目录、关键文件、密码库仍然拒绝。
+        assert!(explicit_delete_forbidden(
+            "C:\\Windows\\System32\\kernel32.dll"
+        ));
+        assert!(explicit_delete_forbidden("C:\\pagefile.sys"));
+        assert!(explicit_delete_forbidden(
+            "C:\\Users\\Administrator\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Login Data"
+        ));
+        assert!(explicit_delete_forbidden("C:\\Program Files\\App\\a.dll"));
+        assert!(explicit_delete_forbidden("C:\\"));
     }
 }
