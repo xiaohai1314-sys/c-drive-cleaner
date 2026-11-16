@@ -264,13 +264,36 @@ pub fn scan_system_deep() -> Vec<SystemItem> {
 pub fn clean_system_item(key: &str) -> Result<(u64, u64, String), String> {
     match key {
         "sys_update_dl" => {
+            // 更新服务运行时删 Download 可能打断正在进行的更新：先停 wuauserv/BITS，清完再按原状态启动。
+            let stopped = stop_services(&["wuauserv", "bits"])?;
             let dir = update_download_dir();
             let (freed, count) = clean_dir_contents(&dir);
+            start_services(&stopped);
             Ok((freed, count, format!("已清理更新安装包 {} 个，释放 {:.2} MB", count, freed as f64 / 1_048_576.0)))
         }
         "sys_delivery_opt" => {
+            // 交给系统自带的 cmdlet 清理，它会通过 DoSvc 删除缓存并保留服务自身的状态文件。
             let dir = delivery_opt_dir();
-            let (freed, count) = clean_dir_contents(&dir);
+            let (before, before_count) = dir_size_count(&dir);
+            let output = Command::new(crate::system32("WindowsPowerShell\\v1.0\\powershell.exe"))
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    "Delete-DeliveryOptimizationCache -Force -ErrorAction Stop",
+                ])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+                .map_err(|e| format!("执行传递优化清理失败：{}", e))?;
+            if !output.status.success() {
+                let err = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("传递优化缓存清理失败：{}", err.trim()));
+            }
+            let (after, after_count) = dir_size_count(&dir);
+            let freed = before.saturating_sub(after);
+            let count = before_count.saturating_sub(after_count);
             Ok((freed, count, format!("已清理传递优化分片 {} 个，释放 {:.2} MB", count, freed as f64 / 1_048_576.0)))
         }
         "sys_crash_dumps" => {
@@ -315,33 +338,80 @@ fn dir_size_count(dir: &Path) -> (u64, u64) {
     (size, count)
 }
 
+/// 清空目录内容（保留目录本身）。不跟随任何重解析点，逐个文件走
+/// `safety::delete_file_checked`（句柄删除 + 父目录无联接校验），再自底向上删空目录。
 fn clean_dir_contents(dir: &Path) -> (u64, u64) {
-    if !dir.is_dir() {
+    let root = dir.to_string_lossy().to_string();
+    if !dir.is_dir() || safety::is_reparse_point(&root) {
         return (0, 0);
     }
+    let roots = vec![root.clone()];
     let mut freed = 0u64;
     let mut count = 0u64;
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_file() {
-                if let Ok(m) = p.metadata() {
-                    let len = m.len();
-                    if std::fs::remove_file(&p).is_ok() {
-                        freed += len;
-                        count += 1;
-                    }
-                }
-            } else if p.is_dir() {
-                let (sub_freed, sub_count) = dir_size_count(&p);
-                if std::fs::remove_dir_all(&p).is_ok() {
-                    freed += sub_freed;
-                    count += sub_count;
-                }
+    let mut walker = WalkDir::new(dir).min_depth(1).follow_links(false).into_iter();
+    while let Some(entry) = walker.next() {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path().to_string_lossy().to_string();
+        if entry.path_is_symlink() || safety::is_reparse_point(&path) {
+            if entry.file_type().is_dir() {
+                walker.skip_current_dir();
             }
+            continue;
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let len = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+        if matches!(
+            safety::delete_file_checked(&path, &roots, false),
+            safety::DeleteOutcome::Deleted
+        ) {
+            freed += len;
+            count += 1;
         }
     }
+    safety::remove_empty_dirs(&root);
     (freed, count)
+}
+
+fn service_running(name: &str) -> bool {
+    Command::new(crate::system32("sc.exe"))
+        .args(["query", name])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).contains("RUNNING"))
+        .unwrap_or(false)
+}
+
+/// 停止仍在运行的服务，返回本次停掉的服务名；任何一个停不下来就把已停的恢复并报错。
+fn stop_services(names: &[&str]) -> Result<Vec<String>, String> {
+    let mut stopped = Vec::new();
+    for &name in names {
+        if !service_running(name) {
+            continue;
+        }
+        let _ = Command::new(crate::system32("net.exe"))
+            .args(["stop", name, "/y"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        if service_running(name) {
+            start_services(&stopped);
+            return Err(format!("{} 服务正在工作且无法暂停，请等待 Windows 更新完成后再清理", name));
+        }
+        stopped.push(name.to_string());
+    }
+    Ok(stopped)
+}
+
+fn start_services(names: &[String]) {
+    for name in names.iter().rev() {
+        let _ = Command::new(crate::system32("net.exe"))
+            .args(["start", name])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
 }
 
 // ---------- 5. 微信 / QQ C盘文件一键搬家 ----------
@@ -420,6 +490,38 @@ fn clear_journal() {
     let _ = std::fs::remove_file(journal_path());
 }
 
+/// 恢复记录是本地 JSON，可能被篡改：只接受「源目录属于微信/QQ 数据目录、
+/// 备份与源同级且名为 `<源名>_backup_<时间戳>`、两者都不是重解析点」的记录。
+fn journal_is_trusted(journal: &MoveJournal) -> bool {
+    let (source_text, backup_text) = (journal.source.as_str(), journal.backup.as_str());
+    if safety::path_syntax_error(source_text) || safety::path_syntax_error(backup_text) {
+        return false;
+    }
+    let mut roots = crate::im::roots("wechat");
+    roots.extend(crate::im::roots("qq"));
+    if !safety::is_within(source_text, &roots) || safety::explicit_delete_forbidden(source_text) {
+        return false;
+    }
+    let source = Path::new(source_text);
+    let backup = Path::new(backup_text);
+    let (Some(source_parent), Some(backup_parent)) = (source.parent(), backup.parent()) else {
+        return false;
+    };
+    if !safety::normalize(&source_parent.to_string_lossy())
+        .eq_ignore_ascii_case(&safety::normalize(&backup_parent.to_string_lossy()))
+    {
+        return false;
+    }
+    let (Some(source_name), Some(backup_name)) = (source.file_name(), backup.file_name()) else {
+        return false;
+    };
+    let prefix = format!("{}_backup_", source_name.to_string_lossy()).to_lowercase();
+    if !backup_name.to_string_lossy().to_lowercase().starts_with(&prefix) {
+        return false;
+    }
+    !safety::is_reparse_point(backup_text)
+}
+
 /// 启动时调用：上次搬家在「原目录改名」之后、「建立联接」之前中断时，
 /// 原路径是空的、数据还在备份目录里，这里把它改回原名。
 pub fn recover_pending_move() {
@@ -430,6 +532,14 @@ pub fn recover_pending_move() {
         clear_journal();
         return;
     };
+    if !journal_is_trusted(&journal) {
+        crate::logs::write_log(&[format!(
+            "微信/QQ 搬家恢复记录不可信，已忽略（未改动任何目录）：{} -> {}",
+            journal.backup, journal.source
+        )]);
+        clear_journal();
+        return;
+    }
     let source = Path::new(&journal.source);
     let backup = Path::new(&journal.backup);
     if backup.is_dir() && !source.exists() {
@@ -515,7 +625,7 @@ pub fn execute_im_migration(
     copy_dir_recursive(source, target)
         .map_err(|e| format!("拷贝文件至新目录失败：{}", e))?;
 
-    // 2. 校验拷贝完整性，确认一致后才动原目录
+    // 2. 校验拷贝完整性：总量一致，且源目录的每个文件在目标里都存在、大小相同，确认后才动原目录
     let (dst_size, dst_cnt) = dir_size_count(target);
     if dst_size != src_size || dst_cnt != file_cnt {
         let _ = std::fs::remove_dir_all(target);
@@ -523,6 +633,10 @@ pub fn execute_im_migration(
             "拷贝校验失败（源 {} 个文件 / {} 字节，目标 {} 个文件 / {} 字节），已放弃搬家并清理目标目录",
             file_cnt, src_size, dst_cnt, dst_size
         ));
+    }
+    if let Err(detail) = verify_copy(source, target) {
+        let _ = std::fs::remove_dir_all(target);
+        return Err(format!("逐文件校验失败（{}），已放弃搬家并清理目标目录", detail));
     }
 
     // 3. 将原目录重命名为临时备份
@@ -574,6 +688,31 @@ pub fn execute_im_migration(
             Err("创建 NTFS 目录联接失败，已自动恢复原状。".to_string())
         }
     }
+}
+
+/// 逐文件核对：源里每个普通文件（不含重解析点下的内容）在目标同一相对路径存在且大小一致。
+fn verify_copy(src: &Path, dst: &Path) -> Result<(), String> {
+    let mut walker = WalkDir::new(src).min_depth(1).follow_links(false).into_iter();
+    while let Some(entry) = walker.next() {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.path_is_symlink() || safety::is_reparse_point(&entry.path().to_string_lossy()) {
+            if entry.file_type().is_dir() {
+                walker.skip_current_dir();
+            }
+            continue;
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative = entry.path().strip_prefix(src).map_err(|e| e.to_string())?;
+        let source_len = entry.metadata().map_err(|e| e.to_string())?.len();
+        let copied = dst.join(relative);
+        match std::fs::symlink_metadata(&copied) {
+            Ok(meta) if meta.is_file() && meta.len() == source_len => {}
+            _ => return Err(format!("{} 未完整拷贝", relative.to_string_lossy())),
+        }
+    }
+    Ok(())
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -631,6 +770,36 @@ mod tests {
         std::fs::write(src.join("sub").join("b.txt"), b"world!").unwrap();
         copy_dir_recursive(&src, &dst).unwrap();
         assert_eq!(dir_size_count(&src), dir_size_count(&dst));
+        assert!(verify_copy(&src, &dst).is_ok());
+        std::fs::write(dst.join("sub").join("b.txt"), b"w").unwrap();
+        assert!(verify_copy(&src, &dst).is_err());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn clean_dir_contents_empties_dir_but_keeps_root() {
+        let base = std::env::temp_dir().join(format!("cdc-clean-{}", std::process::id()));
+        std::fs::create_dir_all(base.join("nested")).unwrap();
+        std::fs::write(base.join("a.bin"), b"12345").unwrap();
+        std::fs::write(base.join("nested").join("b.bin"), b"678").unwrap();
+        let (freed, count) = clean_dir_contents(&base);
+        assert_eq!((freed, count), (8, 2));
+        assert!(base.is_dir());
+        assert!(!base.join("nested").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn untrusted_journal_is_rejected() {
+        let journal = MoveJournal {
+            source: "C:\\Windows\\System32".to_string(),
+            backup: "C:\\Windows\\System32_backup_1".to_string(),
+        };
+        assert!(!journal_is_trusted(&journal));
+        let journal = MoveJournal {
+            source: "C:\\Users\\x\\Documents\\WeChat Files".to_string(),
+            backup: "D:\\elsewhere\\WeChat Files_backup_1".to_string(),
+        };
+        assert!(!journal_is_trusted(&journal));
     }
 }
