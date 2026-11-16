@@ -698,6 +698,8 @@ pub fn create_directory_tree_checked(path: &Path) -> io::Result<Vec<File>> {
             "a volume root cannot be used as a new migration target",
         ));
     }
+    // No DELETE access is needed to pin these names: withholding FILE_SHARE_DELETE
+    // blocks replacement while allowing later checked handles to open the same directories.
     let base_access = FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE_ACCESS;
     let root_handle = open_drive_root_with_access(&root, base_access)?;
     let mut chain = vec![root_handle];
@@ -711,7 +713,7 @@ pub fn create_directory_tree_checked(path: &Path) -> io::Result<Vec<File>> {
             open_relative(
                 create_parent.last().expect("root handle is always present"),
                 component,
-                DELETE_ACCESS | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE_ACCESS,
+                base_access,
                 FILE_DIRECTORY_FILE,
                 2, // FILE_CREATE: fail if the destination already exists
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -734,7 +736,7 @@ pub fn create_directory_tree_checked(path: &Path) -> io::Result<Vec<File>> {
                     open_relative(
                         create_parent.last().expect("root handle is always present"),
                         component,
-                        DELETE_ACCESS | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE_ACCESS,
+                        base_access,
                         FILE_DIRECTORY_FILE,
                         2, // FILE_CREATE: fail if another entry appeared
                         FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -758,14 +760,15 @@ pub fn create_directory_tree_checked(path: &Path) -> io::Result<Vec<File>> {
 
 /// Create one new directory relative to a checked parent below `roots`.
 /// The returned parent chain and directory handle should remain alive while
-/// traversing or writing into the new directory.
+/// traversing or writing into the new directory. The handle omits DELETE access;
+/// withholding FILE_SHARE_DELETE alone keeps the new directory name pinned.
 pub fn create_directory_checked(path: &Path, roots: &[String]) -> io::Result<(Vec<File>, File)> {
     let (chain, name) = open_parent_chain_for_create(path, roots, FILE_ADD_SUBDIRECTORY)?;
     let parent = chain.last().expect("root handle is always present");
     let directory = open_relative(
         parent,
         &name,
-        DELETE_ACCESS | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE_ACCESS,
+        FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE_ACCESS,
         FILE_DIRECTORY_FILE,
         2, // FILE_CREATE: fail if any entry already exists
         FILE_SHARE_READ | FILE_SHARE_WRITE,
