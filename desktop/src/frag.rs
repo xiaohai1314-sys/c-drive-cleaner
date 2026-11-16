@@ -8,6 +8,7 @@ use std::process::Command;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const IOCTL_STORAGE_QUERY_PROPERTY: u32 = 0x002D_1400;
+const IOCTL_STORAGE_GET_DEVICE_NUMBER: u32 = 0x002D_1080;
 const STORAGE_DEVICE_SEEK_PENALTY_PROPERTY: u32 = 7;
 const OPEN_EXISTING: u32 = 3;
 const FILE_SHARE_READ_WRITE_DELETE: u32 = 0x1 | 0x2 | 0x4;
@@ -35,6 +36,13 @@ struct SeekPenaltyDescriptor {
     version: u32,
     size: u32,
     incurs_seek_penalty: u8,
+}
+
+#[repr(C)]
+struct StorageDeviceNumber {
+    device_type: u32,
+    device_number: u32,
+    partition_number: u32,
 }
 
 #[link(name = "kernel32")]
@@ -350,6 +358,56 @@ pub fn is_ssd(drive: &str) -> Option<bool> {
         return None;
     }
     Some(descriptor.incurs_seek_penalty == 0)
+}
+
+/// 查询盘符对应的物理磁盘标识 (device_type, device_number)。
+/// 同盘多分区会返回相同的物理标识，用于避免同盘并发争抢磁头、不同物理盘则可并行。
+pub fn physical_disk_id(drive: &str) -> Option<(u32, u32)> {
+    let letter = drive.trim_end_matches(['\\', '/']).chars().next()?;
+    if !letter.is_ascii_alphabetic() {
+        return None;
+    }
+    let name: Vec<u16> = format!("\\\\.\\{}:", letter)
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let handle = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            0,
+            FILE_SHARE_READ_WRITE_DELETE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle.is_null() || handle as isize == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    let mut info = StorageDeviceNumber {
+        device_type: 0,
+        device_number: 0,
+        partition_number: 0,
+    };
+    let mut returned: u32 = 0;
+    let ok = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_STORAGE_GET_DEVICE_NUMBER,
+            std::ptr::null_mut(),
+            0,
+            &mut info as *mut _ as *mut c_void,
+            std::mem::size_of::<StorageDeviceNumber>() as u32,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    unsafe { CloseHandle(handle) };
+    if ok == 0 {
+        return None;
+    }
+    Some((info.device_type, info.device_number))
 }
 
 #[cfg(test)]

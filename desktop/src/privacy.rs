@@ -459,7 +459,7 @@ fn backup_key(hive: &str, path: &str, label: &str) -> bool {
     let _ = std::fs::create_dir_all(&dir);
     let file = dir.join(format!("{}_{}.reg", label, timeutil::stamp()));
     let full = format!("{}\\{}", hive, path);
-    let status = Command::new("reg.exe")
+    let status = Command::new(crate::system32("reg.exe"))
         .args(["export", &full, &file.to_string_lossy(), "/y"])
         .creation_flags(CREATE_NO_WINDOW)
         .status();

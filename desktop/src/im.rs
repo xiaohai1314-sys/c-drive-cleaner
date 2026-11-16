@@ -80,16 +80,80 @@ fn env_path(key: &str) -> String {
     std::env::var(key).unwrap_or_default()
 }
 
+fn wechat_registry_path() -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    let output = std::process::Command::new(crate::system32("reg.exe"))
+        .args(["query", "HKCU\\Software\\Tencent\\WeChat", "/v", "FileSavePath"])
+        .creation_flags(0x0800_0000)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        if line.contains("FileSavePath") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let path = parts[2..].join(" ");
+                if path != "MyDocument:" {
+                    let p = Path::new(&path);
+                    if p.is_dir() {
+                        return Some(path);
+                    }
+                    let sub = p.join("WeChat Files");
+                    if sub.is_dir() {
+                        return Some(sub.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn wechat_ini_path() -> Option<String> {
+    let roaming = env_path("APPDATA");
+    let ini = Path::new(&roaming).join("Tencent\\WeChat\\All Users\\config\\3ebffe94.ini");
+    if let Ok(content) = std::fs::read_to_string(&ini) {
+        for line in content.lines() {
+            if let Some((k, v)) = line.split_once('=') {
+                if k.trim().eq_ignore_ascii_case("FileSavePath") {
+                    let val = v.trim();
+                    if val != "MyDocument:" {
+                        let p = Path::new(val);
+                        if p.is_dir() {
+                            return Some(val.to_string());
+                        }
+                        let sub = p.join("WeChat Files");
+                        if sub.is_dir() {
+                            return Some(sub.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn roots(kind: &str) -> Vec<String> {
     let roaming = env_path("APPDATA");
     let profile = env_path("USERPROFILE");
-    let candidates: Vec<String> = if kind == "wechat" {
-        vec![
+    let mut candidates: Vec<String> = if kind == "wechat" {
+        let mut list = vec![
             format!("{}\\Tencent\\WeChat", roaming),
             format!("{}\\Tencent\\xwechat", roaming),
             format!("{}\\Documents\\WeChat Files", profile),
             format!("{}\\Documents\\xwechat_files", profile),
-        ]
+        ];
+        if let Some(custom) = wechat_registry_path() {
+            list.push(custom);
+        }
+        if let Some(custom) = wechat_ini_path() {
+            list.push(custom);
+        }
+        list
     } else {
         vec![
             format!("{}\\Tencent\\QQ", roaming),
@@ -97,6 +161,8 @@ pub fn roots(kind: &str) -> Vec<String> {
             format!("{}\\Documents\\Tencent Files", profile),
         ]
     };
+    candidates.sort();
+    candidates.dedup();
     candidates
         .into_iter()
         .filter(|path| Path::new(path).is_dir())

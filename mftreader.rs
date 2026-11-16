@@ -424,7 +424,21 @@ fn emit(entries: &[(u64, String)], root_norm: &str, min_size: u64,
     }
 }
 
-fn full_scan(handle: HANDLE, volume: &NtfsVolumeData) -> Option<Vec<(u64, String)>> {
+fn records_to_entries(records: &HashMap<u64, Rec>, drive: &str) -> Vec<(u64, String)> {
+    let mut cache: HashMap<u64, String> = HashMap::new();
+    let mut out = Vec::new();
+    for (frn, rec) in records.iter() {
+        if rec.is_dir {
+            continue;
+        }
+        if let Some(path) = resolve(*frn, records, &mut cache, drive) {
+            out.push((rec.size, path));
+        }
+    }
+    out
+}
+
+fn full_scan(handle: HANDLE, volume: &NtfsVolumeData, drive: &str) -> Option<Vec<(u64, String)>> {
     let record_size = volume.bytes_per_file_record_segment as usize;
     let bytes_per_cluster = volume.bytes_per_cluster as usize;
     let bytes_per_sector = volume.bytes_per_sector as usize;
@@ -472,30 +486,7 @@ fn full_scan(handle: HANDLE, volume: &NtfsVolumeData) -> Option<Vec<(u64, String
     if records.is_empty() {
         return None;
     }
-    let drive = format!("{}:", (b'A' + 0) as char); // 占位，稍后用真实盘符
-    let _ = drive;
-    Some(records_to_entries(&records))
-}
-
-fn records_to_entries(records: &HashMap<u64, Rec>) -> Vec<(u64, String)> {
-    let mut cache: HashMap<u64, String> = HashMap::new();
-    let mut out = Vec::new();
-    // 盘符从任一顶层路径推断：先找一个父为根的记录
-    let drive = detect_drive(records);
-    for (frn, rec) in records.iter() {
-        if rec.is_dir {
-            continue;
-        }
-        if let Some(path) = resolve(*frn, records, &mut cache, &drive) {
-            out.push((rec.size, path));
-        }
-    }
-    out
-}
-
-fn detect_drive(records: &HashMap<u64, Rec>) -> String {
-    // 顶层记录的父引用低 48 位为 5；无法确定时默认 C:
-    "C:".to_string()
+    Some(records_to_entries(&records, drive))
 }
 
 fn main() {
@@ -510,7 +501,12 @@ fn main() {
     let min_size: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
     let cache_dir = args.get(3).cloned().unwrap_or_default();
     let force = args.iter().any(|a| a == "--refresh");
-    let drive = root[..2].to_uppercase();
+    let drive = match root.as_bytes().first() {
+        Some(letter) if letter.is_ascii_alphabetic() => {
+            format!("{}:", (*letter as char).to_ascii_uppercase())
+        }
+        _ => "C:".to_string(),
+    };
 
     let volume_path = format!("\\\\.\\{}", drive);
     let wpath = wide(&volume_path);
@@ -564,14 +560,8 @@ fn main() {
     }
 
     if entries.is_none() {
-        match full_scan(handle, &volume) {
-            Some(mut list) => {
-                // 用真实盘符修正路径前缀（full_scan 默认 C:）
-                for item in list.iter_mut() {
-                    if item.1.len() >= 2 && &item.1[1..2] == ":" {
-                        item.1.replace_range(0..1, &drive[..1]);
-                    }
-                }
+        match full_scan(handle, &volume, &drive) {
+            Some(list) => {
                 if !cache_dir.is_empty() {
                     let (jid, nusn) = usn.unwrap_or((0, 0));
                     let _ = std::fs::create_dir_all(&cache_dir);

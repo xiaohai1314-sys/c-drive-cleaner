@@ -13,9 +13,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Build MFT reader
-        shell: pwsh
-        run: rustc -O -C panic=abort mftreader.rs -o mftreader.exe
 
       - name: Rust tests
         working-directory: desktop

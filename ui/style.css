@@ -258,3 +258,46 @@ html, body {
   font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 99;
 }
 .toast.show { opacity: 1; }
+
+/* 操作小按钮与智能工具栏 */
+.btn-act {
+  border: 1px solid #d0dfea; background: #fff; color: #2f80ed;
+  font-size: 11px; padding: 2px 7px; border-radius: 5px; cursor: pointer;
+  margin-left: 4px; transition: all .15s;
+}
+.btn-act:hover { background: #eaf3fb; border-color: #2f80ed; }
+.acts { display: flex; gap: 4px; align-items: center; justify-content: flex-end; }
+.acts .btn-act { margin-left: 0; }
+
+.smart-tools { display: flex; gap: 8px; align-items: center; margin: 10px 0 12px; flex-wrap: wrap; }
+.smart-btn {
+  border: 1px solid #d8e5f0; background: #fff; color: #45566a;
+  font-size: 12px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+}
+.smart-btn:hover { background: #eaf3fb; color: #1592e6; border-color: #bfe0f6; }
+.smart-btn.primary { background: #eaf3fb; color: #1592e6; font-weight: 700; border-color: #bfe0f6; }
+
+/* 搬家横幅 */
+.move-banner {
+  background: linear-gradient(135deg, #eaf6ff 0%, #f3f8fd 100%);
+  border: 1px solid #bfe0f6; border-radius: 12px; padding: 14px 16px;
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;
+}
+.move-banner .info-title { font-weight: 700; font-size: 14px; color: #1592e6; }
+.move-banner .info-desc { font-size: 12px; color: #5c6b7a; margin-top: 3px; }
+.move-btn {
+  background: #2f80ed; color: #fff; border: 0; border-radius: 20px;
+  padding: 8px 18px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.move-btn:hover { background: #1c6edb; }
+
+/* 系统瘦身特化卡片 */
+.sys-card {
+  background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px; margin-bottom: 12px; display: flex; align-items: center; gap: 14px;
+}
+.sys-card:hover { border-color: #bfe0f6; }
+.sys-info { flex: 1; }
+.sys-title { font-weight: 700; font-size: 14px; }
+.sys-desc { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+.sys-size { font-size: 14px; font-weight: 700; color: var(--orange); margin-right: 14px; }

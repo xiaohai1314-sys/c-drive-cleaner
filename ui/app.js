@@ -4,6 +4,7 @@ const appWindow = window.__TAURI__?.window?.getCurrentWindow?.();
 
 const SIDEBAR = [
   { key: "clean", label: "C盘瘦身", symbol: "C", color: "#2f80ed" },
+  { key: "system", label: "系统深度瘦身", symbol: "系", color: "#9b59b6" },
   { key: "frag", label: "碎片清理", symbol: "碎", color: "#16a085" },
   { key: "privacy", label: "隐私清理", symbol: "隐", color: "#8e44ad" },
   { key: "big", label: "大文件专清", symbol: "大", color: "#e67e22" },
@@ -23,6 +24,10 @@ const state = {
   categories: [],
   selected: new Set(),
   scanningClean: false,
+  systemItems: [],
+  systemLoading: false,
+  hiber: null,
+  imMove: { wechat: null, qq: null },
   big: null,
   bigLoading: false,
   bigTab: "all",
@@ -30,6 +35,8 @@ const state = {
   dup: null,
   dupLoading: false,
   dupScope: "C:\\",
+  dupDrives: new Set(),
+  dupFast: true,
   dupChecked: new Set(),
   drives: [],
   frag: null,
@@ -125,6 +132,22 @@ function toast(text) {
   node._timer = setTimeout(() => node.classList.remove("show"), 2200);
 }
 
+async function revealFile(path) {
+  try {
+    await invoke("reveal_path", { path });
+  } catch (e) {
+    toast("定位失败：" + e);
+  }
+}
+
+async function openFile(path) {
+  try {
+    await invoke("open_path", { path });
+  } catch (e) {
+    toast("打开失败：" + e);
+  }
+}
+
 function startScanStatus() {
   clearInterval(state.scanPoll);
   state.scanPoll = setInterval(async () => {
@@ -194,6 +217,10 @@ function showPage(key) {
   const page = $("#page");
   page.innerHTML = "";
   if (key === "clean") renderClean();
+  else if (key === "system") {
+    renderSystem();
+    if (!state.systemItems.length && !state.systemLoading) scanSystem();
+  }
   else if (key === "frag") { renderFrag(); if (!state.frag && !state.fragLoading) analyzeFrag(); }
   else if (key === "big") { renderBig(); if (!state.big && !state.bigLoading) scanBig(); }
   else if (key === "dup") { renderDup(); if (!state.dup && !state.dupLoading) scanDup(); }
@@ -324,6 +351,173 @@ async function scanCategories() {
   }
   renderClean();
   updateNavSizes();
+}
+
+/* ---------- 系统深度瘦身 ---------- */
+function renderSystem() {
+  const page = $("#page");
+  page.innerHTML = "";
+
+  const head = el("div", "page-head");
+  const headline = el("div", "headline", "Windows 系统深度瘦身");
+  head.appendChild(headline);
+  const btnRec = el("button", "green-btn", "清空回收站");
+  btnRec.addEventListener("click", async () => {
+    if (await showConfirm("确认清空回收站", ["将彻底清空所有驱动器中的回收站，清空后文件无法还原。"], "立即清空")) {
+      try {
+        await invoke("recycle_empty");
+        toast("全局回收站已清空！");
+        await loadDisk();
+      } catch (e) {
+        toast("清空回收站失败：" + e);
+      }
+    }
+  });
+  head.appendChild(btnRec);
+  page.appendChild(head);
+  page.appendChild(el("div", "sub", "清理 Windows 系统更新残留、传递优化网络分片、崩溃日志与休眠文件"));
+
+  // 1. 系统深度项目
+  const list = state.systemItems || [];
+  const section = el("div", "section");
+  const titleRow = el("div", "section-title");
+  titleRow.appendChild(el("span", null, "系统深度组件"));
+  titleRow.appendChild(el("span", "note", "Windows 核心缓存与更新冗余"));
+  section.appendChild(titleRow);
+
+  if (!list.length && state.systemLoading) {
+    section.appendChild(el("div", "empty", "正在分析系统更新与组件库…"));
+  } else if (!list.length) {
+    section.appendChild(el("div", "empty", "未扫描到系统更新垃圾。"));
+  }
+
+  for (const item of list) {
+    const card = el("div", "sys-card");
+    const icon = el("div", "card-icon", "系");
+    icon.style.background = "#9b59b6";
+    card.appendChild(icon);
+
+    const info = el("div", "sys-info");
+    info.appendChild(el("div", "sys-title", item.name));
+    info.appendChild(el("div", "sys-desc", item.describe));
+    card.appendChild(info);
+
+    if (item.size > 0) {
+      card.appendChild(el("div", "sys-size", fmtSize(item.size)));
+    }
+
+    const actBtn = el("button", "smart-btn primary", item.is_command ? "执行精简" : "立即清理");
+    if (!item.is_command && item.count === 0) {
+      actBtn.disabled = true;
+      actBtn.textContent = "无需清理";
+      actBtn.style.opacity = 0.55;
+      card.appendChild(actBtn);
+      section.appendChild(card);
+      continue;
+    }
+    actBtn.addEventListener("click", async () => {
+      const lines = item.is_command
+        ? ["将执行 DISM 组件库精简，耗时约 1~3 分钟，期间请勿关闭程序。",
+           "只会清理 WinSxS 里的历史更新备份，已安装的更新和系统功能不受影响。"]
+        : [`将删除「${item.name}」中的 ${item.count} 个文件，约 ${fmtSize(item.size)}。`,
+           "这些都是系统缓存、更新残留或崩溃日志，删除后不影响系统正常运行。"];
+      if (!(await showConfirm(item.is_command ? "确认执行组件库精简" : `确认清理${item.name}`, lines, item.is_command ? "开始精简" : "立即清理"))) return;
+      actBtn.disabled = true;
+      actBtn.textContent = "处理中…";
+      try {
+        const msg = await invoke("system_clean", { key: item.key });
+        await showResult("清理完成", [msg]);
+        await scanSystem();
+        await loadDisk();
+      } catch (err) {
+        toast("执行失败：" + err);
+      }
+      actBtn.disabled = false;
+      actBtn.textContent = item.is_command ? "执行精简" : "立即清理";
+    });
+    card.appendChild(actBtn);
+    section.appendChild(card);
+  }
+  page.appendChild(section);
+
+  // 2. 休眠文件管理 (hiberfil.sys)
+  if (state.hiber) {
+    const hSection = el("div", "section");
+    const hTitle = el("div", "section-title");
+    hTitle.appendChild(el("span", null, "系统休眠管理 (hiberfil.sys)"));
+    hTitle.appendChild(el("span", "note", "台式机/笔记本空间释放绝技"));
+    hSection.appendChild(hTitle);
+
+    const card = el("div", "sys-card");
+    const icon = el("div", "card-icon", "休");
+    icon.style.background = "#e67e22";
+    card.appendChild(icon);
+
+    const info = el("div", "sys-info");
+    info.appendChild(el("div", "sys-title", `休眠状态：${state.hiber.enabled ? "已开启" : "未开启 / 已释放"}`));
+    info.appendChild(el("div", "sys-desc", state.hiber.description));
+    card.appendChild(info);
+
+    if (state.hiber.size > 0) {
+      card.appendChild(el("div", "sys-size", fmtSize(state.hiber.size)));
+    }
+
+    const actions = el("div", "smart-tools");
+    if (state.hiber.enabled) {
+      const bOff = el("button", "smart-btn", "彻底关闭休眠（释放全部空间）");
+      bOff.addEventListener("click", () => setHiberMode("off"));
+      const bRed = el("button", "smart-btn", "精简模式（Reduced，缩减50%）");
+      bRed.addEventListener("click", () => setHiberMode("reduced"));
+      actions.append(bOff, bRed);
+    } else {
+      const bOn = el("button", "smart-btn primary", "开启休眠");
+      bOn.addEventListener("click", () => setHiberMode("full"));
+      actions.appendChild(bOn);
+    }
+    card.appendChild(actions);
+    hSection.appendChild(card);
+    page.appendChild(hSection);
+  }
+}
+
+async function scanSystem() {
+  state.systemLoading = true;
+  renderSystem();
+  try {
+    state.systemItems = await invoke("system_scan");
+    state.hiber = await invoke("hiber_query");
+  } catch (e) {
+    toast("系统项扫描失败：" + e);
+  }
+  state.systemLoading = false;
+  renderSystem();
+}
+
+async function setHiberMode(mode) {
+  const size = state.hiber && state.hiber.size ? fmtSize(state.hiber.size) : "全部空间";
+  if (mode === "off") {
+    const ok = await showConfirm("确认彻底关闭休眠", [
+      `hiberfil.sys（约 ${size}）会被删除，C 盘空间立即释放。`,
+      "关闭休眠会同时关闭 Windows「快速启动」，开机可能略慢几秒。",
+      "「睡眠」功能不受影响；需要时随时可以重新开启休眠。"
+    ], "关闭休眠");
+    if (!ok) return;
+  } else if (mode === "reduced") {
+    const ok = await showConfirm("确认精简休眠文件", [
+      `休眠文件会缩减到约一半（当前 ${size}）。`,
+      "仍可正常休眠，但内核内存转储会受限。"
+    ], "精简休眠文件");
+    if (!ok) return;
+  }
+  try {
+    const msg = await invoke("hiber_set", { mode });
+    toast(msg);
+    state.hiber = await invoke("hiber_query");
+    await loadDisk();
+    renderSystem();
+  } catch (err) {
+    toast("设置休眠失败：" + err);
+  }
 }
 
 /* ---------- 碎片清理 ---------- */
@@ -494,9 +688,9 @@ function renderBig() {
   const visible = state.bigTab === "all" ? rows : rows.filter((row) => kindOf(row.path) === state.bigTab);
   const table = el("div", "table");
   const thead = el("div", "thead");
-  thead.style.gridTemplateColumns = "28px 1fr 70px 100px 140px";
+  thead.style.gridTemplateColumns = "28px 1fr 60px 90px 130px 105px";
   thead.append(el("span", null, ""), el("span", null, "文件名称"), el("span", null, "磁盘"),
-               el("span", null, "文件大小"), el("span", null, "修改时间"));
+               el("span", null, "文件大小"), el("span", null, "修改时间"), el("span", null, "操作"));
   table.appendChild(thead);
 
   if (!visible.length) {
@@ -504,7 +698,9 @@ function renderBig() {
   }
   for (const row of visible) {
     const line = el("div", "row");
-    line.style.gridTemplateColumns = "28px 1fr 70px 100px 140px";
+    line.style.gridTemplateColumns = "28px 1fr 60px 90px 130px 105px";
+    line.title = "双击在资源管理器中定位";
+    line.addEventListener("dblclick", () => revealFile(row.path));
     const check = el("div", "check" + (state.bigChecked.has(row.path) ? " on" : ""));
     check.addEventListener("click", () => {
       if (state.bigChecked.has(row.path)) state.bigChecked.delete(row.path);
@@ -518,6 +714,17 @@ function renderBig() {
     line.appendChild(el("div", "muted", diskOf(row.path)));
     line.appendChild(el("div", "muted", fmtSize(row.size)));
     line.appendChild(el("div", "muted", fmtTime(row.mtime)));
+
+    const acts = el("div", "acts");
+    const bLoc = el("button", "btn-act", "定位");
+    bLoc.title = "在资源管理器中定位";
+    bLoc.addEventListener("click", (e) => { e.stopPropagation(); revealFile(row.path); });
+    const bOpen = el("button", "btn-act", "打开");
+    bOpen.title = "打开文件";
+    bOpen.addEventListener("click", (e) => { e.stopPropagation(); openFile(row.path); });
+    acts.append(bLoc, bOpen);
+    line.appendChild(acts);
+
     table.appendChild(line);
   }
   page.appendChild(table);
@@ -560,11 +767,28 @@ function renderDup() {
     head.appendChild(cancel);
   }
   page.appendChild(head);
-  page.appendChild(el("div", "sub", state.dupLoading
-    ? `正在查找重复文件…${state.scanStatus?.dup?.cancelled ? " 正在停止" : "（默认只扫 C 盘）"}`
-    : `每组自动保留一份，已勾选 ${state.dupChecked.size} 个副本`));
+  let dupSub;
+  if (state.dupLoading) {
+    const status = state.scanStatus?.dup;
+    const stage = status?.stage || "查找重复文件";
+    const counts = status?.total ? ` ${status.done}/${status.total}` : "";
+    const found = status?.found ? `，已发现 ${status.found} 组` : "";
+    const stopping = status?.cancelled ? " 正在停止" : "";
+    dupSub = `正在${stage}${counts}${found}…${stopping}`;
+  } else if (state.dupScope === "PICK" && !state.dupDrives.size) {
+    dupSub = "请选择要扫描的磁盘，然后点「扫描选中的磁盘」。";
+  } else {
+    const multiDrive = state.dupScope === "ALL" || state.dupScope === "PICK";
+    const scopeNote = multiDrive ? "（多盘扫描只比对 ≥4MB 的文件）" : "";
+    const fastNote = state.dupFast ? "（快速扫描：只比对头/中/尾 256KB，删除前完整核对）" : "";
+    const picked = state.dupScope === "PICK"
+      ? `已选 ${[...state.dupDrives].map((drive) => drive.replace(/\\+$/, "")).join("、")}，`
+      : "";
+    dupSub = `${picked}每组自动保留一份，已勾选 ${state.dupChecked.size} 个副本${scopeNote}${fastNote}`;
+  }
+  page.appendChild(el("div", "sub", dupSub));
 
-  const scopes = [["C:\\", "C盘"], ["USER", "用户目录"], ["ALL", "全部磁盘"]];
+  const scopes = [["C:\\", "C盘"], ["USER", "用户目录"], ["ALL", "全部磁盘"], ["PICK", "按盘选择"]];
   const tabs = el("div", "tabs");
   for (const [value, label] of scopes) {
     const tab = el("button", "tab" + (state.dupScope === value ? " active" : ""));
@@ -575,14 +799,81 @@ function renderDup() {
       state.dup = null;
       state.dupChecked = new Set();
       renderDup();
-      scanDup();
+      if (value !== "PICK") scanDup();
     });
     tabs.appendChild(tab);
   }
   page.appendChild(tabs);
 
+  if (state.dupScope === "PICK") {
+    const picker = el("div", "smart-tools");
+    picker.appendChild(el("span", "muted", "选择要扫描的磁盘："));
+    const allDrives = state.drives && state.drives.length ? state.drives : ["C:\\"];
+    for (const drive of allDrives) {
+      const on = state.dupDrives.has(drive);
+      const chip = el("button", "smart-btn" + (on ? " primary" : ""), drive.replace(/\\+$/, ""));
+      chip.addEventListener("click", () => {
+        if (state.dupDrives.has(drive)) state.dupDrives.delete(drive);
+        else state.dupDrives.add(drive);
+        state.dup = null;
+        state.dupChecked = new Set();
+        renderDup();
+      });
+      picker.appendChild(chip);
+    }
+    const go = el("button", "smart-btn primary", "扫描选中的磁盘");
+    go.addEventListener("click", () => {
+      if (!state.dupDrives.size) {
+        toast("请先选择要扫描的磁盘");
+        return;
+      }
+      state.dup = null;
+      state.dupChecked = new Set();
+      renderDup();
+      scanDup();
+    });
+    picker.appendChild(go);
+    page.appendChild(picker);
+  }
+
+  const tools = el("div", "smart-tools");
+  const bFast = el("button", "smart-btn" + (state.dupFast ? " primary" : ""),
+                   state.dupFast ? "快速扫描：开" : "快速扫描：关");
+  bFast.title = "开启后只比对头/中/尾各 256KB，扫描更快；删除时仍会拿副本和保留文件做完整比对";
+  bFast.addEventListener("click", () => {
+    state.dupFast = !state.dupFast;
+    state.dup = null;
+    state.dupChecked = new Set();
+    renderDup();
+    if (state.dupScope !== "PICK" || state.dupDrives.size) scanDup();
+  });
+  const bKeepNew = el("button", "smart-btn", "✨ 保留最新文件");
+  bKeepNew.addEventListener("click", () => applyKeeperRule("newest"));
+  const bKeepShort = el("button", "smart-btn", "✨ 保留路径最短");
+  bKeepShort.addEventListener("click", () => applyKeeperRule("shortest"));
+  const bCheckAll = el("button", "smart-btn", "全选所有副本");
+  bCheckAll.addEventListener("click", () => {
+    state.dupChecked = new Set();
+    for (const group of groups) {
+      const keeper = pickKeeper(group);
+      for (const p of group.files) if (p !== keeper) state.dupChecked.add(p);
+    }
+    renderDup();
+  });
+  const bUncheckAll = el("button", "smart-btn", "清空勾选");
+  bUncheckAll.addEventListener("click", () => {
+    state.dupChecked.clear();
+    renderDup();
+  });
+  tools.append(bFast, bKeepNew, bKeepShort, bCheckAll, bUncheckAll);
+  page.appendChild(tools);
+
   if (!groups.length) {
-    page.appendChild(el("div", "empty", state.dupLoading ? "扫描中…" : "没有找到重复文件。"));
+    page.appendChild(el("div", "empty", state.dupLoading
+      ? "扫描中…"
+      : state.dupScope === "PICK" && !state.dupDrives.size
+        ? "请先选择磁盘并开始扫描。"
+        : "没有找到重复文件。"));
     return;
   }
 
@@ -596,7 +887,9 @@ function renderDup() {
     const keeper = pickKeeper(group);
     for (const path of group.files) {
       const line = el("div", "row");
-      line.style.gridTemplateColumns = "28px 1fr 100px 140px";
+      line.style.gridTemplateColumns = "28px 1fr 90px 130px 105px";
+      line.title = "双击在资源管理器中定位";
+      line.addEventListener("dblclick", () => revealFile(path));
       const isKeeper = path === keeper;
       const checked = state.dupChecked.has(path);
       const check = el("div", "check" + (checked && !isKeeper ? " on" : ""));
@@ -613,6 +906,17 @@ function renderDup() {
       line.appendChild(name);
       line.appendChild(el("div", "muted", fmtSize(group.size)));
       line.appendChild(el("div", "muted", fmtTime(group.mtimes[group.files.indexOf(path)])));
+
+      const acts = el("div", "acts");
+      const bLoc = el("button", "btn-act", "定位");
+      bLoc.title = "在资源管理器中定位";
+      bLoc.addEventListener("click", (e) => { e.stopPropagation(); revealFile(path); });
+      const bOpen = el("button", "btn-act", "打开");
+      bOpen.title = "打开文件";
+      bOpen.addEventListener("click", (e) => { e.stopPropagation(); openFile(path); });
+      acts.append(bLoc, bOpen);
+      line.appendChild(acts);
+
       box.appendChild(line);
     }
     page.appendChild(box);
@@ -620,6 +924,30 @@ function renderDup() {
   if (groups.length > 300) {
     page.appendChild(el("div", "empty", `只显示了前 300 组，共 ${groups.length} 组。`));
   }
+}
+
+function applyKeeperRule(rule) {
+  state.dupChecked.clear();
+  for (const group of state.dup || []) {
+    let keeper = group.files[0];
+    if (rule === "newest") {
+      let maxTime = -1;
+      group.files.forEach((p, idx) => {
+        const t = group.mtimes[idx] || 0;
+        if (t > maxTime) { maxTime = t; keeper = p; }
+      });
+    } else if (rule === "shortest") {
+      let minLen = 999999;
+      group.files.forEach((p) => {
+        if (p.length < minLen) { minLen = p.length; keeper = p; }
+      });
+    }
+    for (const p of group.files) {
+      if (p !== keeper) state.dupChecked.add(p);
+    }
+  }
+  toast(rule === "newest" ? "已智能保留各组修改时间最新的文件" : "已智能保留各组路径最短的文件");
+  renderDup();
 }
 
 function pickKeeper(group) {
@@ -640,10 +968,24 @@ async function scanDup() {
   startScanStatus();
   renderDup();
   try {
-    const root = state.dupScope === "C:\\" ? "C:\\"
-      : state.dupScope === "ALL" ? null
-      : await invoke("user_profile");
-    state.dup = await invoke("scan_dups", { root });
+    let root = null;
+    let drives = null;
+    if (state.dupScope === "C:\\") {
+      root = "C:\\";
+    } else if (state.dupScope === "USER") {
+      root = await invoke("user_profile");
+    } else if (state.dupScope === "PICK") {
+      drives = [...state.dupDrives];
+      if (!drives.length) {
+        state.dupLoading = false;
+        stopScanStatus();
+        renderDup();
+        return;
+      }
+    }
+    const multiDrive = state.dupScope === "ALL" || state.dupScope === "PICK";
+    const minSize = multiDrive ? 4 * 1024 * 1024 : null;
+    state.dup = await invoke("scan_dups", { root, drives, minSize, fast: state.dupFast });
     state.dupChecked = new Set();
     for (const group of state.dup) {
       const keeper = pickKeeper(group);
@@ -678,6 +1020,23 @@ function renderIm(key) {
   page.appendChild(el("div", "sub", state.imLoading[key]
     ? "正在扫描聊天文件…"
     : `已勾选 ${chosen.length} 个，共 ${fmtSize(chosenSize)}`));
+
+  const moveInfo = state.imMove && state.imMove[key];
+  const canMove = moveInfo
+    ? (moveInfo.exists && !moveInfo.is_junction && moveInfo.size > 0)
+    : files.some((file) => file.path.length > 1 && file.path[1] === ":" && file.path[0].toLowerCase() === "c");
+  if (canMove) {
+    const banner = el("div", "move-banner");
+    const info = el("div");
+    const t = el("div", "info-title", `🚀 ${title}存储一键搬家 (彻底释放 C 盘)`);
+    const scannedSize = moveInfo ? moveInfo.size : files.reduce((sum, file) => sum + file.size, 0);
+    const d = el("div", "info-desc", `检测到 ${title}数据在 C 盘${scannedSize ? `（约 ${fmtSize(scannedSize)}）` : ""}。可一键迁移到其他硬盘分区并建立无缝软链接，不丢聊天记录与文件！`);
+    info.append(t, d);
+    const mbtn = el("button", "move-btn", "一键搬家到其他磁盘");
+    mbtn.addEventListener("click", () => startImMove(key, mbtn));
+    banner.append(info, mbtn);
+    page.appendChild(banner);
+  }
 
   const totals = {};
   for (const file of files) {
@@ -719,7 +1078,9 @@ function renderIm(key) {
     box.appendChild(headRow);
     for (const file of items) {
       const row = el("div", "row");
-      row.style.gridTemplateColumns = "28px 1fr 100px 140px";
+      row.style.gridTemplateColumns = "28px 1fr 90px 130px 105px";
+      row.title = "双击在资源管理器中定位";
+      row.addEventListener("dblclick", () => revealFile(file.path));
       const check = el("div", "check" + (state.imChecked[key].has(file.path) ? " on" : ""));
       check.addEventListener("click", () => {
         if (state.imChecked[key].has(file.path)) state.imChecked[key].delete(file.path);
@@ -733,6 +1094,17 @@ function renderIm(key) {
       row.appendChild(name);
       row.appendChild(el("div", "muted", fmtSize(file.size)));
       row.appendChild(el("div", "muted", fmtTime(file.mtime)));
+
+      const acts = el("div", "acts");
+      const bLoc = el("button", "btn-act", "定位");
+      bLoc.title = "在资源管理器中定位";
+      bLoc.addEventListener("click", (e) => { e.stopPropagation(); revealFile(file.path); });
+      const bOpen = el("button", "btn-act", "打开");
+      bOpen.title = "打开文件";
+      bOpen.addEventListener("click", (e) => { e.stopPropagation(); openFile(file.path); });
+      acts.append(bLoc, bOpen);
+      row.appendChild(acts);
+
       box.appendChild(row);
     }
     page.appendChild(box);
@@ -767,6 +1139,71 @@ async function scanIm(key) {
       .map((file) => file.path),
   );
   renderIm(key);
+}
+
+async function startImMove(key, button) {
+  const name = key === "wechat" ? "微信" : "QQ";
+  let moveInfo = state.imMove[key];
+  if (!moveInfo) {
+    if (button) {
+      button.disabled = true;
+      button.textContent = "正在分析…";
+    }
+    try {
+      moveInfo = await invoke("im_move_analyze", { kind: key });
+      state.imMove[key] = moveInfo;
+    } catch (e) {
+      toast("分析数据位置失败：" + e);
+      return;
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = "一键搬家到其他磁盘";
+      }
+    }
+  }
+  if (!moveInfo.exists || !moveInfo.size) {
+    toast(`没有检测到 C 盘的${name}数据`);
+    return;
+  }
+  if (moveInfo.is_junction) {
+    toast(`${name}数据已经搬家过了，无需重复操作`);
+    return;
+  }
+  if (!moveInfo.target_drives || !moveInfo.target_drives.length) {
+    toast("未检测到其他可用硬盘分区（当前仅有C盘）");
+    return;
+  }
+  const targetDrive = moveInfo.target_drives[0].letter;
+  const driveLabel = targetDrive.replace(/\\+$/, "");
+  const base = targetDrive.endsWith("\\") ? targetDrive : targetDrive + "\\";
+  const folder = key === "wechat" ? "WeChat_Files_Migrated" : "QQ_Files_Migrated";
+  const targetDir = `${base}${folder}`;
+  const lines = [
+    `源数据目录：${moveInfo.source}`,
+    `数据总体积：${fmtSize(moveInfo.size)}（${moveInfo.file_count} 个文件）`,
+    `目标迁移位置：${targetDir}`,
+    `无感搬家机制：系统会将数据安全转移至目标磁盘，并在原 C 盘路径建立原生 NTFS 目录联接（Junction Point）。`,
+    `搬家后：${name}正常读写完全不受影响，聊天记录与文件 100% 完整保留，原 C 盘空间全额腾出！`,
+    `⚠️ 关键提示：开始前请确认已彻底退出 ${name} 客户端！`
+  ];
+  if (!(await showConfirm(`确认将 ${name} 数据迁移至 ${driveLabel} 盘`, lines, "开始搬家"))) return;
+
+  toast("正在搬家，数据量较大请耐心等待…");
+  try {
+    const res = await invoke("im_move_execute", {
+      source: moveInfo.source,
+      targetDir,
+      kind: key
+    });
+    await showResult("搬家成功", [res]);
+    state.imMove[key] = await invoke("im_move_analyze", { kind: key });
+    await scanCategories();
+    await loadDisk();
+    renderIm(key);
+  } catch (err) {
+    await showResult("搬家失败", [String(err)]);
+  }
 }
 
 async function cleanIm(key, button) {
@@ -890,10 +1327,27 @@ async function cleanPrivacy(button) {
     toast("请先勾选要清理的项目");
     return;
   }
+
+  // 浏览器进程占用检查：先只检测，真正关闭放在用户确认清理之后
+  let running = [];
+  try {
+    running = await invoke("check_processes", {
+      targets: ["chrome.exe", "msedge.exe", "firefox.exe", "qqbrowser.exe", "brave.exe"]
+    });
+  } catch (e) {}
+
   const lines = [`将清理 ${ids.length} 项隐私痕迹。`,
                  "浏览器历史、Cookie、下载记录会被删除；文件类痕迹移到回收站；注册表项删除前会导出备份。",
                  "已保存的密码不会被删除。"];
+  if (running && running.length) {
+    lines.push(`检测到 ${running.join("、")} 正在运行，开始清理时会先关闭它们（未保存的网页表单内容会丢失）。`);
+  }
   if (!(await showConfirm("确认清理隐私痕迹", lines, "开始清理"))) return;
+  for (const proc of running || []) {
+    try {
+      await invoke("kill_process", { name: proc });
+    } catch (e) {}
+  }
   button.disabled = true;
   button.textContent = "清理中…";
   try {
@@ -1075,6 +1529,15 @@ async function cleanSelected(button) {
     toast("请先勾选要清理的项目");
     return;
   }
+
+  // 运行进程冲突检测：先只检测，真正关闭放在用户确认清理之后
+  let running = [];
+  try {
+    running = await invoke("check_processes", {
+      targets: ["wechat.exe", "qq.exe", "xwechat.exe", "chrome.exe", "msedge.exe", "firefox.exe"]
+    });
+  } catch (e) {}
+
   const total = chosen.reduce((sum, cat) => sum + Math.max(cat.size, 0), 0);
   const deep = chosen.filter((cat) => cat.requires_confirm);
   const lines = [`将清理 ${chosen.length} 项，预计释放 ${fmtSize(total)}。`,
@@ -1082,7 +1545,15 @@ async function cleanSelected(button) {
   if (deep.length) {
     lines.push(`其中 ${deep.length} 项含需确认的数据：${deep.map((cat) => cat.name).join("、")}。`);
   }
+  if (running && running.length) {
+    lines.push(`检测到 ${running.join("、")} 正在运行，开始清理时会先关闭它们（请先保存未完成的工作）。`);
+  }
   if (!(await showConfirm("确认清理", lines, "开始清理"))) return;
+  for (const proc of running || []) {
+    try {
+      await invoke("kill_process", { name: proc });
+    } catch (e) {}
+  }
   button.disabled = true;
   button.textContent = "清理中…";
   try {
@@ -1099,6 +1570,7 @@ async function cleanSelected(button) {
   button.disabled = false;
   button.textContent = "一键瘦身";
   await scanCategories();
+  await loadDisk();
 }
 
 async function deleteBig(button) {
@@ -1133,7 +1605,7 @@ async function deleteDups(button) {
     const keeper = pickKeeper(group);
     group.files.forEach((path, index) => {
       if (path === keeper || !state.dupChecked.has(path)) return;
-      items.push({ path, hash: group.hash, size: group.size, mtime: group.mtimes[index] || 0 });
+      items.push({ path, hash: group.hash, size: group.size, mtime: group.mtimes[index] || 0, keeper });
     });
   }
   if (!items.length) {
@@ -1143,6 +1615,9 @@ async function deleteDups(button) {
   const total = items.reduce((sum, item) => sum + item.size, 0);
   const lines = [`将把 ${items.length} 个副本移到回收站，约 ${fmtSize(total)}。`,
                  "每组保留一份；删除前会重新核对内容，扫描后变过的文件会跳过。"];
+  if (state.dupFast) {
+    lines.push("当前是快速扫描：删除前会把每个副本和保留文件完整比对一遍，数据量大时需要几分钟。");
+  }
   if (!(await showConfirm("确认清理重复文件", lines, "移到回收站"))) return;
   button.disabled = true;
   button.textContent = "清理中…";
