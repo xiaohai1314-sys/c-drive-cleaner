@@ -31,6 +31,7 @@ const state = {
   big: null,
   bigLoading: false,
   bigTab: "all",
+  bigShown: 500,
   bigChecked: new Set(),
   dup: null,
   dupLoading: false,
@@ -104,6 +105,8 @@ const IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".h
 const DOC_EXT = new Set([".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt",
   ".csv", ".rtf", ".ofd", ".md", ".wps", ".et", ".dps", ".dwg", ".dxf"]);
 const ARCHIVE_EXT = new Set([".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".cab"]);
+
+const BIG_PAGE = 500;
 
 function kindOf(path) {
   const ext = extOf(path);
@@ -680,7 +683,7 @@ function renderBig() {
     const tab = el("button", "tab" + (state.bigTab === kind ? " active" : ""));
     tab.appendChild(document.createTextNode(BIG_NAMES[kind]));
     if (kind !== "all" && totals[kind]) tab.appendChild(el("span", "tab-size", fmtSize(totals[kind])));
-    tab.addEventListener("click", () => { state.bigTab = kind; renderBig(); });
+    tab.addEventListener("click", () => { state.bigTab = kind; state.bigShown = BIG_PAGE; renderBig(); });
     tabs.appendChild(tab);
   }
   page.appendChild(tabs);
@@ -696,7 +699,8 @@ function renderBig() {
   if (!visible.length) {
     table.appendChild(el("div", "empty", state.bigLoading ? "扫描中…" : "没有找到大文件。"));
   }
-  for (const row of visible) {
+  // 分档阈值降到 2MB 后结果可能有数万行，分批渲染避免一次性创建大量 DOM 卡住界面。
+  for (const row of visible.slice(0, state.bigShown)) {
     const line = el("div", "row");
     line.style.gridTemplateColumns = "28px 1fr 60px 90px 130px 105px";
     line.title = "双击在资源管理器中定位";
@@ -727,11 +731,18 @@ function renderBig() {
 
     table.appendChild(line);
   }
+  if (visible.length > state.bigShown) {
+    const rest = visible.length - state.bigShown;
+    const more = el("button", "smart-btn", `再显示 ${Math.min(rest, BIG_PAGE)} 个（还有 ${rest} 个）`);
+    more.addEventListener("click", () => { state.bigShown += BIG_PAGE; renderBig(); });
+    table.appendChild(more);
+  }
   page.appendChild(table);
 }
 
 async function scanBig() {
   state.bigLoading = true;
+  state.bigShown = BIG_PAGE;
   startScanStatus();
   renderBig();
   try {
