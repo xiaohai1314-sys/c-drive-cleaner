@@ -585,6 +585,259 @@ fn query_usn_journal(handle: *mut c_void) -> Option<UsnJournalData> {
     }
 }
 
+/// 打开卷并返回 (volume_serial, journal_id, first_usn, next_usn)，供索引记录每卷的 USN 游标。
+/// 与 `try_mft_scan` 的开卷逻辑一致；需要管理员权限，打不开返回 None。
+pub fn volume_usn_state(root: &str) -> Option<(u64, u64, i64, i64)> {
+    let trimmed = root.trim_end_matches('\\');
+    let letter = trimmed.chars().next()?;
+    if trimmed.len() < 2 || trimmed.as_bytes()[1] != b':' || !letter.is_ascii_alphabetic() {
+        return None;
+    }
+    let drive = format!("{}:", letter.to_ascii_uppercase());
+    let volume_path = format!("\\\\.\\{}", drive);
+    let wpath = wide(&volume_path);
+    let raw_handle = unsafe {
+        CreateFileW(
+            wpath.as_ptr(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw_handle.is_null() || raw_handle == INVALID_HANDLE_PTR {
+        return None;
+    }
+    let handle = VolumeHandle(raw_handle);
+    let mut volume = NtfsVolumeData::default();
+    let mut returned: u32 = 0;
+    let ok = unsafe {
+        DeviceIoControl(
+            handle.0,
+            FSCTL_GET_NTFS_VOLUME_DATA,
+            std::ptr::null_mut(),
+            0,
+            &mut volume as *mut _ as *mut c_void,
+            std::mem::size_of::<NtfsVolumeData>() as u32,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let journal = query_usn_journal(handle.0)?;
+    Some((
+        volume.volume_serial_number as u64,
+        journal.usn_journal_id,
+        journal.first_usn,
+        journal.next_usn,
+    ))
+}
+
+/// USN 增量变化集里的一条当前文件记录（仍符合索引条件：≥1MB 且在非跳过目录下）。
+pub struct UsnChangedFile {
+    pub frn: u64,
+    pub path: String,
+    pub size: u64,
+    pub mtime: u64,
+}
+
+/// 一次 `FSCTL_READ_USN_JOURNAL` 读出的变化 FRN 逐个重读 MFT 记录后得到的变化集。
+/// 调用方按此更新索引：`deleted_frns` 删行；`renamed_dirs` 批量改写路径前缀；
+/// `files` 做元数据 upsert（size/mtime 变了的摘要自动清 NULL 待重算）。
+/// （volume_serial 不存——调用方已知是哪一卷。）
+pub struct UsnChangeSet {
+    pub journal_id: u64,
+    /// 变化集覆盖到的 USN 游标；应用完后可作为新的 `usn_state.next_usn` 存入索引。
+    pub next_usn: i64,
+    /// 记录已无（删了 / 无法解析）或不再符合索引条件
+    /// （变为目录 / 缩到 1MB 以下 / 落在跳过目录下）：调用方删行。
+    pub deleted_frns: Vec<u64>,
+    /// 当前仍符合索引条件的文件。
+    pub files: Vec<UsnChangedFile>,
+    /// 改名/移动的目录（旧路径，新路径）：调用方把索引里该前缀下的 path 批量改写。
+    /// 路径不带尾斜杠；调用方拼前缀时自行补 `\`。
+    pub renamed_dirs: Vec<(String, String)>,
+}
+
+/// 取自 `stored_next_usn` 以来的 USN 变化集。
+///
+/// 返回 None 表示调用方应全量重建：日志不可用（打不开卷 / 读日志失败）、断档
+/// （journal_id 变了 / 游标早于日志起点 / 游标超前）、变化太多（> MAX_USN_DELTA_FRNS，
+/// `collect_usn_changed_indices` 返回 None），或没有快照（路径解析需要快照的目录表）。
+/// 空变化集也返回 Some（游标仍需推进）。
+pub fn usn_changes_since(
+    root: &str,
+    stored_journal_id: u64,
+    stored_next_usn: i64,
+    skip_top: &[&str],
+) -> Option<UsnChangeSet> {
+    let trimmed = root.trim_end_matches('\\');
+    let letter = trimmed.chars().next()?;
+    if trimmed.len() < 2 || trimmed.as_bytes()[1] != b':' || !letter.is_ascii_alphabetic() {
+        return None;
+    }
+    let drive = format!("{}:", letter.to_ascii_uppercase());
+    let volume_path = format!("\\\\.\\{}", drive);
+    let wpath = wide(&volume_path);
+    let raw_handle = unsafe {
+        CreateFileW(
+            wpath.as_ptr(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw_handle.is_null() || raw_handle == INVALID_HANDLE_PTR {
+        return None;
+    }
+    let handle = VolumeHandle(raw_handle);
+    let mut volume = NtfsVolumeData::default();
+    let mut returned: u32 = 0;
+    let ok = unsafe {
+        DeviceIoControl(
+            handle.0,
+            FSCTL_GET_NTFS_VOLUME_DATA,
+            std::ptr::null_mut(),
+            0,
+            &mut volume as *mut _ as *mut c_void,
+            std::mem::size_of::<NtfsVolumeData>() as u32,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let record_size = volume.bytes_per_file_record_segment as usize;
+    let bytes_per_sector = volume.bytes_per_sector as usize;
+    let bytes_per_cluster = volume.bytes_per_cluster as usize;
+    if !(record_size == 1024 || record_size == 4096)
+        || bytes_per_cluster == 0
+        || bytes_per_sector == 0
+    {
+        return None;
+    }
+    let serial = volume.volume_serial_number as u64;
+
+    let journal = query_usn_journal(handle.0)?;
+    if journal.usn_journal_id != stored_journal_id
+        || stored_next_usn < journal.first_usn
+        || stored_next_usn > journal.next_usn
+    {
+        return None;
+    }
+    let changed = collect_usn_changed_indices(handle.0, &journal, stored_next_usn)?;
+    if changed.is_empty() {
+        return Some(UsnChangeSet {
+            journal_id: journal.usn_journal_id,
+            next_usn: journal.next_usn,
+            deleted_frns: Vec::new(),
+            files: Vec::new(),
+            renamed_dirs: Vec::new(),
+        });
+    }
+
+    // 路径解析需要快照的目录表（没有快照就全量重建，那边会重新生成快照）。
+    let old_dirs = mem_snapshot_get(serial)
+        .map(|s| s.dirs.clone())
+        .or_else(|| load_snapshot(&snapshot_path(serial)).map(|s| s.dirs))?;
+    let mut dirs = old_dirs.clone();
+
+    // 第 1 遍：逐个重读变化 FRN 的 MFT 记录。`parse_record_in_place` 用 1MB 下限：
+    // 小于下限的文件返回 Skip，与记录消失一样处理（调用方删行）。
+    let mut out_buf = vec![0u8; 16 + record_size];
+    let mut deleted_frns: Vec<u64> = Vec::new();
+    let mut file_recs: Vec<(u64, RawFile)> = Vec::new();
+    let mut dir_frn_list: Vec<u64> = Vec::new();
+    for idx in &changed {
+        match read_single_mft_record(handle.0, *idx, record_size, &mut out_buf) {
+            Some((actual_frn, _len)) if (actual_frn & 0xFFFF_FFFF_FFFF) == *idx => {
+                let rec = &mut out_buf[12..12 + record_size];
+                match parse_record_in_place(
+                    rec,
+                    *idx,
+                    bytes_per_sector,
+                    bytes_per_cluster,
+                    SNAPSHOT_FLOOR_MIN_SIZE,
+                ) {
+                    ParsedRecord::Dir { index, node } => {
+                        dirs.insert(index, node);
+                        dir_frn_list.push(index);
+                    }
+                    ParsedRecord::File { index, raw } => file_recs.push((index, raw)),
+                    _ => deleted_frns.push(*idx),
+                }
+            }
+            _ => deleted_frns.push(*idx),
+        }
+    }
+
+    // 第 2 遍：用旧/新两份目录表解析本次变化目录的改名。所有目录更新已先应用，
+    // 所以父子目录同时改名时解析结果与处理顺序无关。
+    let mut renamed_dirs: Vec<(String, String)> = Vec::new();
+    {
+        let mut old_cache: HashMap<u64, Option<String>> = HashMap::new();
+        let mut new_cache: HashMap<u64, Option<String>> = HashMap::new();
+        for index in &dir_frn_list {
+            let old_path = resolve_dir(*index, &old_dirs, &mut old_cache, &drive, true, skip_top);
+            let new_path = resolve_dir(*index, &dirs, &mut new_cache, &drive, true, skip_top);
+            if let (Some(o), Some(n)) = (old_path, new_path) {
+                if o != n {
+                    renamed_dirs.push((o, n));
+                }
+            }
+        }
+    }
+
+    // 第 3 遍：用更新后的目录表解析变化文件的完整路径。
+    // 根目录下的文件（parent_frn == 5）直接拼盘符；跳过目录下的文件解析不到路径，
+    // 与根目录解析失败一样进 deleted（调用方删行）。
+    let mut files: Vec<UsnChangedFile> = Vec::new();
+    {
+        let mut dir_cache: HashMap<u64, Option<String>> = HashMap::new();
+        for (frn, raw) in file_recs {
+            let parent = raw.parent_frn & 0xFFFF_FFFF_FFFF;
+            let dir_path = if parent == 5 {
+                format!("{}\\", drive)
+            } else {
+                match resolve_dir(parent, &dirs, &mut dir_cache, &drive, true, skip_top) {
+                    Some(p) => p,
+                    None => {
+                        deleted_frns.push(frn);
+                        continue;
+                    }
+                }
+            };
+            let full_path = if dir_path.ends_with('\\') {
+                format!("{}{}", dir_path, raw.name)
+            } else {
+                format!("{}\\{}", dir_path, raw.name)
+            };
+            files.push(UsnChangedFile {
+                frn,
+                path: full_path,
+                size: raw.size,
+                mtime: raw.mtime,
+            });
+        }
+    }
+
+    Some(UsnChangeSet {
+        journal_id: journal.usn_journal_id,
+        next_usn: journal.next_usn,
+        deleted_frns,
+        files,
+        renamed_dirs,
+    })
+}
+
 fn collect_usn_changed_indices(
     handle: *mut c_void,
     journal: &UsnJournalData,

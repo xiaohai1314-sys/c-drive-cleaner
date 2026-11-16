@@ -53,6 +53,9 @@ const state = {
   shredPaths: [],
   scanStatus: null,
   scanPoll: null,
+  indexStatus: null,
+  indexSyncing: false,
+  indexTask: null,
 };
 
 const IM_KINDS = {
@@ -668,9 +671,10 @@ function renderBig() {
     head.appendChild(cancel);
   }
   page.appendChild(head);
+  const indexNote = state.indexSyncing ? "索引同步中…" : indexStatusText();
   page.appendChild(el("div", "sub", state.bigLoading
-    ? `正在扫描各磁盘的大文件…${state.scanStatus?.big?.cancelled ? " 正在停止" : ""}`
-    : "按类型分档扫描（视频/临时文件 20MB、文档/图片/日志 2MB、压缩包/音频 5MB、安装包 100MB、其他 50MB），删除前会先预览"));
+    ? `正在扫描各磁盘的大文件…${state.scanStatus?.big?.cancelled ? " 正在停止" : ""}｜${indexNote}`
+    : `按类型分档扫描（视频/临时文件 20MB、文档/图片/日志 2MB、压缩包/音频 5MB、安装包 100MB、其他 50MB），删除前会先预览｜${indexNote}`));
 
   const totals = { all: 0 };
   for (const row of rows) {
@@ -687,6 +691,17 @@ function renderBig() {
     tabs.appendChild(tab);
   }
   page.appendChild(tabs);
+
+  const indexTools = el("div", "smart-tools");
+  const bSyncBig = el("button", "smart-btn", state.indexSyncing ? "同步中…" : "立即同步");
+  bSyncBig.disabled = state.indexSyncing || state.bigLoading;
+  bSyncBig.addEventListener("click", () => syncIndexNow(false));
+  const bRebuildBig = el("button", "smart-btn", "重建索引");
+  bRebuildBig.disabled = state.indexSyncing || state.bigLoading;
+  bRebuildBig.addEventListener("click", () => syncIndexNow(true));
+  indexTools.append(bSyncBig, bRebuildBig);
+  page.appendChild(indexTools);
+  page.appendChild(indexTaskRow());
 
   const visible = state.bigTab === "all" ? rows : rows.filter((row) => kindOf(row.path) === state.bigTab);
   const table = el("div", "table");
@@ -740,10 +755,105 @@ function renderBig() {
   page.appendChild(table);
 }
 
+/* ---------- 索引状态 ---------- */
+async function refreshIndexStatus() {
+  try {
+    state.indexStatus = await invoke("index_status");
+  } catch (error) {
+    state.indexStatus = null;
+  }
+}
+
+const INDEX_STATE_NAMES = { fresh: "已同步", behind: "待同步", stale: "已过期", missing: "未建立", unavailable: "不可用" };
+
+function indexStatusText() {
+  const st = state.indexStatus;
+  if (!st || !st.volumes || !st.volumes.length) return "索引：未知";
+  const total = st.volumes.reduce((sum, v) => sum + v.files, 0);
+  const bad = st.volumes.filter((v) => v.state !== "fresh");
+  if (!bad.length) return `索引已同步（共 ${total.toLocaleString()} 个文件）`;
+  const parts = bad.map((v) => `${v.drive.replace(/\\+$/, "")}${INDEX_STATE_NAMES[v.state] || v.state}`);
+  return `索引：${parts.join("、")}`;
+}
+
+async function syncIndexNow(rebuild) {
+  if (state.indexSyncing) return;
+  if (rebuild && !(await showConfirm("确认重建索引", ["将清掉全部索引并全量重建，大盘可能需要几分钟。", "重建期间重复/大文件页会回落实时扫描。"], "开始重建"))) return;
+  state.indexSyncing = true;
+  if (state.page === "dup") renderDup();
+  if (state.page === "big") renderBig();
+  try {
+    const summary = await invoke(rebuild ? "index_rebuild" : "index_sync_now");
+    toast(summary);
+  } catch (error) {
+    toast("索引同步失败：" + error);
+  }
+  state.indexSyncing = false;
+  await refreshIndexStatus();
+  if (state.page === "dup") { renderDup(); scanDup(); }
+  else if (state.page === "big") { renderBig(); scanBig(); }
+}
+
+/* ---------- 计划任务（每日 03:00 跑 --index） ---------- */
+async function refreshIndexTask() {
+  try {
+    state.indexTask = await invoke("index_task_status");
+  } catch (error) {
+    state.indexTask = null;
+  }
+}
+
+function indexTaskText() {
+  const t = state.indexTask;
+  if (!t) return "计划任务：未知";
+  if (!t.exists) return "计划任务：未注册";
+  return t.enabled ? "计划任务：每日 03:00 自动同步（已启用）" : "计划任务：每日 03:00 自动同步（已禁用）";
+}
+
+// 手动跑一次计划任务（后台执行，顺带验证 S4U 提权；跑完看索引状态与日志）。
+async function runIndexTask() {
+  try {
+    toast(await invoke("index_task_run"));
+  } catch (error) {
+    toast("运行计划任务失败：" + error);
+  }
+  await refreshIndexTask();
+  if (state.page === "dup") renderDup();
+  else if (state.page === "big") renderBig();
+}
+
+async function setIndexTaskEnabled(enabled) {
+  try {
+    toast(await invoke("index_task_set_enabled", { enabled }));
+  } catch (error) {
+    toast("修改计划任务失败：" + error);
+  }
+  await refreshIndexTask();
+  if (state.page === "dup") renderDup();
+  else if (state.page === "big") renderBig();
+}
+
+// 计划任务行：状态 + 运行/启用禁用。重复/大文件页共用。
+function indexTaskRow() {
+  const row = el("div", "smart-tools");
+  row.appendChild(el("span", "muted", indexTaskText()));
+  const bRun = el("button", "smart-btn", "运行计划任务");
+  bRun.title = "立即在后台跑一次计划任务（--index），顺带验证计划任务的提权是否生效";
+  bRun.disabled = !state.indexTask?.exists;
+  bRun.addEventListener("click", () => runIndexTask());
+  const bToggle = el("button", "smart-btn", state.indexTask?.enabled ? "禁用" : "启用");
+  bToggle.disabled = !state.indexTask?.exists;
+  bToggle.addEventListener("click", () => setIndexTaskEnabled(!state.indexTask.enabled));
+  row.append(bRun, bToggle);
+  return row;
+}
+
 async function scanBig() {
   state.bigLoading = true;
   state.bigShown = BIG_PAGE;
   startScanStatus();
+  await refreshIndexStatus();
+  await refreshIndexTask();
   renderBig();
   try {
     state.big = await invoke("scan_big");
@@ -778,6 +888,7 @@ function renderDup() {
     head.appendChild(cancel);
   }
   page.appendChild(head);
+  const indexNote = state.indexSyncing ? "索引同步中…" : indexStatusText();
   let dupSub;
   if (state.dupLoading) {
     const status = state.scanStatus?.dup;
@@ -785,7 +896,7 @@ function renderDup() {
     const counts = status?.total ? ` ${status.done}/${status.total}` : "";
     const found = status?.found ? `，已发现 ${status.found} 组` : "";
     const stopping = status?.cancelled ? " 正在停止" : "";
-    dupSub = `正在${stage}${counts}${found}…${stopping}`;
+    dupSub = `正在${stage}${counts}${found}…${stopping}｜${indexNote}`;
   } else if (state.dupScope === "PICK" && !state.dupDrives.size) {
     dupSub = "请选择要扫描的磁盘，然后点「扫描选中的磁盘」。";
   } else {
@@ -795,7 +906,7 @@ function renderDup() {
     const picked = state.dupScope === "PICK"
       ? `已选 ${[...state.dupDrives].map((drive) => drive.replace(/\\+$/, "")).join("、")}，`
       : "";
-    dupSub = `${picked}每组自动保留一份，已勾选 ${state.dupChecked.size} 个副本${scopeNote}${fastNote}`;
+    dupSub = `${picked}每组自动保留一份，已勾选 ${state.dupChecked.size} 个副本${scopeNote}${fastNote}｜${indexNote}`;
   }
   page.appendChild(el("div", "sub", dupSub));
 
@@ -877,7 +988,15 @@ function renderDup() {
     renderDup();
   });
   tools.append(bFast, bKeepNew, bKeepShort, bCheckAll, bUncheckAll);
+  const bSync = el("button", "smart-btn", state.indexSyncing ? "同步中…" : "立即同步");
+  bSync.disabled = state.indexSyncing || state.dupLoading;
+  bSync.addEventListener("click", () => syncIndexNow(false));
+  const bRebuild = el("button", "smart-btn", "重建索引");
+  bRebuild.disabled = state.indexSyncing || state.dupLoading;
+  bRebuild.addEventListener("click", () => syncIndexNow(true));
+  tools.append(bSync, bRebuild);
   page.appendChild(tools);
+  page.appendChild(indexTaskRow());
 
   if (!groups.length) {
     page.appendChild(el("div", "empty", state.dupLoading
@@ -977,6 +1096,8 @@ function pickKeeper(group) {
 async function scanDup() {
   state.dupLoading = true;
   startScanStatus();
+  await refreshIndexStatus();
+  await refreshIndexTask();
   renderDup();
   try {
     let root = null;

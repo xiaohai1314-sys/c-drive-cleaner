@@ -4,10 +4,12 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 mod fastio;
+mod fileindex;
 mod frag;
 mod hashcache;
 mod mft;
 mod im;
+mod indextask;
 mod logs;
 mod privacy;
 mod process;
@@ -735,6 +737,16 @@ fn big_file_threshold_bytes(path: &str) -> u64 {
 fn scan_big(drives: Option<Vec<String>>) -> Vec<BigFile> {
     scan_begin("big", "大文件扫描");
     let list = drives.unwrap_or_else(fixed_drives);
+    // 索引优先：新鲜（必要时先做纯元数据增量）时直接查库，不枚举。
+    // 索引缺失/断档时回落到下面的实时扫描，不触发回填。
+    scan_stage("big", "索引同步");
+    if let Some(index) = fileindex::FileIndex::open_default() {
+        let mut index = index;
+        if let Some(rows) = query_big_from_index(&mut index, &list) {
+            scan_end("big");
+            return rows;
+        }
+    }
     let per_drive = run_per_physical_disk(
         list,
         |d| d.as_str(),
@@ -858,6 +870,159 @@ fn sort_dup_groups(groups: &mut [DupGroup]) {
         let right = b.size * b.files.len() as u64;
         right.cmp(&left)
     });
+}
+
+/// FileEntry → DupCandidate（scan_dups 与回填共用）：摘要取自 file_hashes 缓存，
+/// `mtime` 由调用方解析好（MFT 里没有时读文件属性）。
+/// 索引行没有 MFT 布局信息，增量补算不走这条路（见 `hash_index_groups`）。
+fn dup_candidate_from_file_entry(
+    entry: mft::FileEntry,
+    mtime: u64,
+    cache: &hashcache::HashCache,
+    disk_cache: &mut HashMap<char, DiskKey>,
+) -> DupCandidate {
+    let is_ssd = disk_key_for_path(&entry.path, disk_cache) == DiskKey::Ssd;
+    let cached = cache.entry_for(&entry.path, entry.size, mtime);
+    DupCandidate {
+        path: entry.path,
+        size: entry.size,
+        mtime,
+        sort_key: entry.sort_key,
+        frn: entry.frn,
+        first_lcn: entry.first_lcn,
+        bytes_per_cluster: entry.bytes_per_cluster,
+        can_raw_read: entry.can_raw_read,
+        is_ssd,
+        file_id: None,
+        head: cached.and_then(|e| e.head),
+        sample: cached.and_then(|e| e.sample),
+        strong: cached.and_then(|e| e.strong),
+        full: cached.and_then(|e| e.full),
+        probe: None,
+        dirty_head: false,
+        dirty_sample: false,
+        dirty_strong: false,
+        dirty_full: false,
+    }
+}
+
+/// 把按 size 分好组的候选按"是否已有最终摘要 / 是否全在 SSD 上"分流。
+/// 返回（已就绪的最终组，纯 SSD 待跑管线，混合待跑管线）。
+/// `fast` 为真时最终摘要是 strong（快速模式），否则是 full。
+/// scan_dups、回填、增量补算三处共用（Phase 1 的重复逻辑，Phase 3 抽出）。
+fn split_dup_candidates(
+    by_size: HashMap<u64, Vec<DupCandidate>>,
+    fast: bool,
+) -> (
+    HashMap<(u64, hashcache::Digest), Vec<DupCandidate>>,
+    Vec<DupCandidate>,
+    Vec<DupCandidate>,
+) {
+    let mut ready_final: HashMap<(u64, hashcache::Digest), Vec<DupCandidate>> = HashMap::new();
+    let mut ssd_only_stage1: Vec<DupCandidate> = Vec::new();
+    let mut mixed_stage1: Vec<DupCandidate> = Vec::new();
+    for bucket in by_size.into_values() {
+        if bucket.len() < 2 {
+            continue;
+        }
+        let mut all_ready = true;
+        let mut all_ssd = true;
+        for item in &bucket {
+            if !item.is_ssd {
+                all_ssd = false;
+            }
+            let has_final = if fast {
+                item.strong.is_some()
+            } else {
+                item.full.is_some()
+            };
+            if !has_final {
+                all_ready = false;
+            }
+        }
+        if all_ready {
+            for item in bucket {
+                let key_digest = if fast {
+                    item.strong.unwrap()
+                } else {
+                    item.full.unwrap()
+                };
+                ready_final
+                    .entry((item.size, key_digest))
+                    .or_default()
+                    .push(item);
+            }
+        } else if all_ssd {
+            ssd_only_stage1.extend(bucket);
+        } else {
+            mixed_stage1.extend(bucket);
+        }
+    }
+    (ready_final, ssd_only_stage1, mixed_stage1)
+}
+
+/// SSD/混合两路管线并行跑完，摘要回写缓存，返回（最终组候选，淘汰候选）。
+/// `update_stage` 为真时更新 UI 阶段（实时扫描用；后台索引用 false）。
+/// `fast`/`trace`/标签透传给 `run_dup_pipeline`。三处共用。
+#[allow(clippy::too_many_arguments)]
+fn run_dup_pipelines(
+    ssd_stage1: Vec<DupCandidate>,
+    mixed_stage1: Vec<DupCandidate>,
+    cache: &mut hashcache::HashCache,
+    stamp_now: u64,
+    fast: bool,
+    trace: bool,
+    ssd_label: &str,
+    mixed_label: &str,
+    update_stage: bool,
+) -> (Vec<DupCandidate>, Vec<DupCandidate>) {
+    if ssd_stage1.is_empty() && mixed_stage1.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    dup_progress_reset(ssd_stage1.len() + mixed_stage1.len());
+    // 消除栅栏：纯固态盘的候选桶独立完整跑完 1→2→3 阶段，无需等待慢速机械盘每一阶段的同步点。
+    let has_mixed = !mixed_stage1.is_empty();
+    let (ssd_out, mixed_out) = std::thread::scope(|scope| {
+        let ssd_handle = if !ssd_stage1.is_empty() {
+            Some(scope.spawn(move || {
+                run_dup_pipeline(
+                    ssd_stage1,
+                    fast,
+                    1,
+                    update_stage && !has_mixed,
+                    trace,
+                    ssd_label,
+                )
+            }))
+        } else {
+            None
+        };
+        let mixed_out = if has_mixed {
+            run_dup_pipeline(mixed_stage1, fast, 2, update_stage, trace, mixed_label)
+        } else {
+            PipelineOutput {
+                final_items: Vec::new(),
+                eliminated: Vec::new(),
+            }
+        };
+        let ssd_out = ssd_handle
+            .and_then(|h| h.join().ok())
+            .unwrap_or(PipelineOutput {
+                final_items: Vec::new(),
+                eliminated: Vec::new(),
+            });
+        (ssd_out, mixed_out)
+    });
+    flush_candidate_hashes(cache, &ssd_out.eliminated, stamp_now);
+    flush_candidate_hashes(cache, &ssd_out.final_items, stamp_now);
+    flush_candidate_hashes(cache, &mixed_out.eliminated, stamp_now);
+    flush_candidate_hashes(cache, &mixed_out.final_items, stamp_now);
+    cache.save_dirty();
+    let mut final_items = ssd_out.final_items;
+    final_items.extend(mixed_out.final_items);
+    let mut eliminated = ssd_out.eliminated;
+    eliminated.extend(mixed_out.eliminated);
+    (final_items, eliminated)
 }
 
 fn flush_candidate_hashes(
@@ -1341,6 +1506,16 @@ fn scan_dups(
         return Vec::new();
     }
     let min = min_size.unwrap_or(1 << 20);
+    // 索引优先：新鲜（必要时先增量追赶）且完整时直接查库，不枚举、不哈希。
+    // 索引缺失/断档/不完整时回落到下面的 JSON 缓存与实时扫描。
+    scan_stage("dup", "索引同步");
+    if let Some(index) = fileindex::FileIndex::open_default() {
+        let mut index = index;
+        if let Some(groups) = query_dups_from_index(&mut index, &roots, min, fast) {
+            scan_end("dup");
+            return groups;
+        }
+    }
     let cache_key = blake3::hash(format!("{:?}:{}:{}", roots, min, fast).as_bytes())
         .to_hex()
         .to_string();
@@ -1431,73 +1606,20 @@ fn scan_dups(
     let stamp_now = now_seconds();
 
     let mut disk_cache: HashMap<char, DiskKey> = HashMap::new();
-    let mut ready_final: HashMap<(u64, hashcache::Digest), Vec<DupCandidate>> = HashMap::new();
-    let mut ssd_only_stage1: Vec<DupCandidate> = Vec::new();
-    let mut mixed_stage1: Vec<DupCandidate> = Vec::new();
-
+    let mut by_size: HashMap<u64, Vec<DupCandidate>> = HashMap::new();
     for bucket in size_buckets.drain(..) {
-        let mut converted: Vec<DupCandidate> = Vec::with_capacity(bucket.len());
-        let mut all_ready = true;
-        let mut all_ssd = true;
         for entry in bucket {
-            let is_ssd = disk_key_for_path(&entry.path, &mut disk_cache) == DiskKey::Ssd;
-            if !is_ssd {
-                all_ssd = false;
-            }
             let mtime = if entry.mtime != 0 {
                 entry.mtime
             } else {
                 file_mtime(&entry.path)
             };
-            let cached = cache.entry_for(&entry.path, entry.size, mtime);
-            let head = cached.and_then(|e| e.head);
-            let sample = cached.and_then(|e| e.sample);
-            let strong = cached.and_then(|e| e.strong);
-            let full = cached.and_then(|e| e.full);
-            let has_final = if fast { strong.is_some() } else { full.is_some() };
-            if !has_final {
-                all_ready = false;
-            }
-            converted.push(DupCandidate {
-                path: entry.path,
-                size: entry.size,
-                mtime,
-                sort_key: entry.sort_key,
-                frn: entry.frn,
-                first_lcn: entry.first_lcn,
-                bytes_per_cluster: entry.bytes_per_cluster,
-                can_raw_read: entry.can_raw_read,
-                is_ssd,
-                file_id: None,
-                head,
-                sample,
-                strong,
-                full,
-                probe: None,
-                dirty_head: false,
-                dirty_sample: false,
-                dirty_strong: false,
-                dirty_full: false,
-            });
-        }
-        if all_ready {
-            for item in converted {
-                let key_digest = if fast {
-                    item.strong.unwrap()
-                } else {
-                    item.full.unwrap()
-                };
-                ready_final
-                    .entry((item.size, key_digest))
-                    .or_default()
-                    .push(item);
-            }
-        } else if all_ssd {
-            ssd_only_stage1.extend(converted);
-        } else {
-            mixed_stage1.extend(converted);
+            let size = entry.size;
+            let candidate = dup_candidate_from_file_entry(entry, mtime, &cache, &mut disk_cache);
+            by_size.entry(size).or_default().push(candidate);
         }
     }
+    let (mut ready_final, ssd_only_stage1, mixed_stage1) = split_dup_candidates(by_size, fast);
 
     let pending_total = ssd_only_stage1.len() + mixed_stage1.len();
     if pending_total == 0 {
@@ -1512,51 +1634,24 @@ fn scan_dups(
         return groups;
     }
 
-    dup_progress_reset(pending_total);
-
-    // 消除栅栏：纯固态盘的候选桶独立完整跑完 1→2→3 阶段，无需等待慢速机械盘每一阶段的同步点。
-    let has_mixed = !mixed_stage1.is_empty();
-    let (ssd_out, mixed_out) = std::thread::scope(|scope| {
-        let ssd_handle = if !ssd_only_stage1.is_empty() {
-            Some(scope.spawn(move || {
-                run_dup_pipeline(ssd_only_stage1, fast, 1, !has_mixed, trace, "ssd")
-            }))
-        } else {
-            None
-        };
-        let mixed_out = if has_mixed {
-            run_dup_pipeline(mixed_stage1, fast, 2, true, trace, "hdd+mixed")
-        } else {
-            PipelineOutput {
-                final_items: Vec::new(),
-                eliminated: Vec::new(),
-            }
-        };
-        let ssd_out = ssd_handle
-            .and_then(|h| h.join().ok())
-            .unwrap_or(PipelineOutput {
-                final_items: Vec::new(),
-                eliminated: Vec::new(),
-            });
-        (ssd_out, mixed_out)
-    });
-
-    flush_candidate_hashes(&mut cache, &ssd_out.eliminated, stamp_now);
-    flush_candidate_hashes(&mut cache, &ssd_out.final_items, stamp_now);
-    flush_candidate_hashes(&mut cache, &mixed_out.eliminated, stamp_now);
-    flush_candidate_hashes(&mut cache, &mixed_out.final_items, stamp_now);
-    cache.save_dirty();
+    let (final_items, _eliminated) = run_dup_pipelines(
+        ssd_only_stage1,
+        mixed_stage1,
+        &mut cache,
+        stamp_now,
+        fast,
+        trace,
+        "ssd",
+        "hdd+mixed",
+        true,
+    );
 
     if dup_cancelled() {
         scan_end("dup");
         return Vec::new();
     }
 
-    for item in ssd_out
-        .final_items
-        .into_iter()
-        .chain(mixed_out.final_items.into_iter())
-    {
+    for item in final_items {
         let digest_opt = if fast { item.strong } else { item.full };
         if let Some(digest) = digest_opt {
             ready_final
@@ -2530,6 +2625,921 @@ fn ensure_admin() {
     }
 }
 
+fn is_admin() -> bool {
+    // unsafe 块在语句位置会被当成语句解析，包一层括号才可继续写 != 0。
+    (unsafe { IsUserAnAdmin() }) != 0
+}
+
+/// --index 回填：全盘 MFT 枚举 + 同 size 文件算哈希，填持久化索引库。
+/// 计划任务调的就是它。只读不删，不碰任何实时扫描路径。
+/// 返回进程退出码：0 全部成功，1 部分卷失败，2 未提权。
+/// 单卷索引结果（`--index` / 索引查询的增量追赶共用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IndexVolumeStatus {
+    /// 全量回填完成。
+    Backfilled,
+    /// USN 增量追赶完成。
+    Incremented,
+    /// 失败（打不开卷 / 元数据写库失败）。
+    Failed,
+}
+
+struct IndexVolumeOutcome {
+    status: IndexVolumeStatus,
+    /// 新增/更新的文件行数（回填 = 枚举到的行数；增量 = 变化集里的文件数）。
+    files: u64,
+    /// 增量：删除的行数（回填恒为 0）。
+    deleted: u64,
+    /// 增量：目录改名改写的路径行数（回填恒为 0）。
+    renamed: u64,
+    /// 从 file_hashes 缓存复用的 full 摘要个数。
+    reused_full: u64,
+    /// 哈希管线新算的 full 摘要个数。
+    hashed_new: u64,
+    elapsed_secs: f64,
+}
+
+/// 索引进度日志：`logs/index-YYYYMMDD.log`（与扫描日志同目录）。
+/// 只写给人看的进度行；写失败静默忽略（不影响索引本身）。
+fn index_log(msg: &str) {
+    let name = format!("index-{}.log", &timeutil::stamp()[..8]);
+    logs::append_line(&name, msg);
+}
+
+/// 增量维护的哈希补算：对"同 size ≥ 2 且组内至少一个缺 full"的组跑哈希管线。
+/// 摘要来源优先级：索引行已有 > file_hashes 缓存 > 管线新算；新摘要双写（索引 + 缓存）。
+/// 返回（从缓存复用的 full 个数，管线新算的 full 个数）。
+/// 注意：索引行没有 MFT 布局信息（first_lcn/can_raw_read），这里的候选一律走普通文件读，
+/// 不走 raw-read 快车道；增量组通常很小，影响可忽略（首次回填走全量路径，有完整布局信息）。
+/// 分流与管线执行与 scan_dups/回填共用（`split_dup_candidates` / `run_dup_pipelines`）；
+/// 索引行转候选的摘要来源不同，转换留在这里。
+fn hash_index_groups(index: &mut fileindex::FileIndex, serial: u64, stamp_now: u64) -> (u64, u64) {
+    let rows = index.rows_needing_full(serial);
+    if rows.is_empty() {
+        return (0, 0);
+    }
+    let mut cache = hashcache::HashCache::load_for_paths(rows.iter().map(|r| r.path.as_str()));
+    let mut by_size: HashMap<u64, Vec<DupCandidate>> = HashMap::new();
+    let mut disk_cache: HashMap<char, DiskKey> = HashMap::new();
+    let mut reused: HashSet<(u64, u64)> = HashSet::new();
+    let mut had_full: HashSet<(u64, u64)> = HashSet::new();
+    // 索引行转候选：摘要来源是索引行已有 > file_hashes 缓存（与 FileEntry 源不同，
+    // 转换留在这里）；布局信息没有，走普通文件读（不走 raw-read 快车道），见设计文档 §3。
+    for r in &rows {
+        let is_ssd = disk_key_for_path(&r.path, &mut disk_cache) == DiskKey::Ssd;
+        let cached = cache.entry_for(&r.path, r.size, r.mtime);
+        let head = r.head.or_else(|| cached.and_then(|e| e.head));
+        let sample = r.sample.or_else(|| cached.and_then(|e| e.sample));
+        let strong = r.strong.or_else(|| cached.and_then(|e| e.strong));
+        let full = r.full.or_else(|| cached.and_then(|e| e.full));
+        if full.is_some() {
+            had_full.insert((serial, r.frn));
+            if r.full.is_none() {
+                // 索引里没有、缓存里有：复用。
+                reused.insert((serial, r.frn));
+            }
+        }
+        by_size.entry(r.size).or_default().push(DupCandidate {
+            path: r.path.clone(),
+            size: r.size,
+            mtime: r.mtime,
+            sort_key: 0,
+            frn: r.frn,
+            first_lcn: 0,
+            bytes_per_cluster: 0,
+            can_raw_read: false,
+            is_ssd,
+            file_id: None,
+            head,
+            sample,
+            strong,
+            full,
+            probe: None,
+            dirty_head: false,
+            dirty_sample: false,
+            dirty_strong: false,
+            dirty_full: false,
+        });
+    }
+    let (ready_final, ssd_only_stage1, mixed_stage1) = split_dup_candidates(by_size, false);
+    let (final_items, eliminated_items) = run_dup_pipelines(
+        ssd_only_stage1,
+        mixed_stage1,
+        &mut cache,
+        stamp_now,
+        false,
+        false,
+        "index-ssd",
+        "index-hdd",
+        false,
+    );
+    let mut hashed_items = final_items;
+    hashed_items.extend(eliminated_items);
+    let mut updates: Vec<fileindex::DigestUpdate> = Vec::new();
+    for item in ready_final.values().flatten().chain(hashed_items.iter()) {
+        if item.head.is_some()
+            || item.sample.is_some()
+            || item.strong.is_some()
+            || item.full.is_some()
+        {
+            updates.push(fileindex::DigestUpdate {
+                volume_serial: serial,
+                frn: item.frn,
+                size: item.size,
+                mtime: item.mtime,
+                head: item.head,
+                sample: item.sample,
+                strong: item.strong,
+                full: item.full,
+            });
+        }
+    }
+    index.set_digests_batch(&updates);
+    let reused_full = reused.len() as u64;
+    let hashed_new = hashed_items
+        .iter()
+        .filter(|c| c.full.is_some() && !had_full.contains(&(serial, c.frn)))
+        .count() as u64;
+    (reused_full, hashed_new)
+}
+
+/// 增量维护：把一个 USN 变化集应用到索引（删行 / 路径前缀改写 / 元数据 upsert），
+/// 再对缺失摘要的组做哈希补算。游标在元数据落库后、哈希之前写——中断后续跑
+/// 只补缺失摘要，不重扫。
+fn index_volume_incremental(
+    index: &mut fileindex::FileIndex,
+    drive: &str,
+    serial: u64,
+    changes: mft::UsnChangeSet,
+    quiet: bool,
+    do_hash: bool,
+    started: std::time::Instant,
+) -> IndexVolumeOutcome {
+    let stamp_now = now_seconds();
+    let deleted = index.delete_rows(serial, &changes.deleted_frns) as u64;
+    let mut renamed = 0u64;
+    for (old, new) in &changes.renamed_dirs {
+        renamed += index.update_path_prefix(serial, old, new) as u64;
+    }
+    let rows: Vec<fileindex::IndexRow> = changes
+        .files
+        .iter()
+        .map(|f| fileindex::IndexRow {
+            volume_serial: serial,
+            frn: f.frn,
+            path: f.path.clone(),
+            size: f.size,
+            mtime: f.mtime,
+            last_seen: stamp_now,
+        })
+        .collect();
+    let files = rows.len() as u64;
+    if !rows.is_empty() && index.upsert_files(&rows) == 0 {
+        // 事务失败：游标不写，下次重新追赶。
+        let msg = format!("--index：{} 增量元数据写入失败。", drive);
+        eprintln!("{}", msg);
+        index_log(&msg);
+        return IndexVolumeOutcome {
+            status: IndexVolumeStatus::Failed,
+            files: 0,
+            deleted,
+            renamed,
+            reused_full: 0,
+            hashed_new: 0,
+            elapsed_secs: started.elapsed().as_secs_f64(),
+        };
+    }
+    index.set_usn_state(serial, changes.journal_id, changes.next_usn);
+    let (reused_full, hashed_new) = if do_hash {
+        hash_index_groups(index, serial, stamp_now)
+    } else {
+        (0, 0)
+    };
+    let elapsed = started.elapsed().as_secs_f64();
+    let line = format!(
+        "index: {} 增量：删 {} 行，路径修正 {} 个，新增/更新 {} 个文件，复用缓存 {} 个，新算 {} 个，用时 {:.1}s",
+        drive, deleted, renamed, files, reused_full, hashed_new, elapsed
+    );
+    if !quiet {
+        println!("{}", line);
+    }
+    index_log(&line);
+    IndexVolumeOutcome {
+        status: IndexVolumeStatus::Incremented,
+        files,
+        deleted,
+        renamed,
+        reused_full,
+        hashed_new,
+        elapsed_secs: elapsed,
+    }
+}
+
+/// 单卷索引入口：游标可用时走 USN 增量追赶，否则全量回填。
+/// `do_hash` 只影响增量路径（big 页的纯元数据追赶用 false；回填总是算摘要——
+/// 索引缺失/断档时 big 页回落实时扫描，不走无摘要回填）。
+/// `rebuild` 为真时先清掉该卷的索引行和游标，再全量回填。
+fn index_volume(
+    index: &mut fileindex::FileIndex,
+    drive: &str,
+    quiet: bool,
+    do_hash: bool,
+    rebuild: bool,
+) -> IndexVolumeOutcome {
+    let started = std::time::Instant::now();
+    let Some((serial, journal_id, first_usn, next_usn)) = mft::volume_usn_state(drive) else {
+        let msg = format!("--index：{} 打不开卷或 USN 日志。", drive);
+        eprintln!("{}", msg);
+        index_log(&msg);
+        return IndexVolumeOutcome {
+            status: IndexVolumeStatus::Failed,
+            files: 0,
+            deleted: 0,
+            renamed: 0,
+            reused_full: 0,
+            hashed_new: 0,
+            elapsed_secs: started.elapsed().as_secs_f64(),
+        };
+    };
+    if rebuild {
+        index.delete_volume(serial);
+    }
+    if !rebuild {
+        if let Some((stored_journal_id, stored_next_usn)) = index.get_usn_state(serial) {
+            if fileindex::usn_state_usable(
+                stored_journal_id,
+                stored_next_usn,
+                journal_id,
+                first_usn,
+                next_usn,
+            ) {
+                if let Some(changes) =
+                    mft::usn_changes_since(drive, stored_journal_id, stored_next_usn, &TOP_SKIP)
+                {
+                    return index_volume_incremental(
+                        index, drive, serial, changes, quiet, do_hash, started,
+                    );
+                }
+                // 变化集取不到（无快照 / 变化太多 / 日志读失败）：回落全量回填。
+                if !quiet {
+                    println!("index: {} 增量不可用（变化集取不到），全量回填", drive);
+                }
+            }
+        }
+    }
+    index_volume_backfill(index, drive, serial, journal_id, next_usn, quiet)
+}
+
+/// 单卷增量追赶（仅增量，不回填）：游标可用且变化集可取时返回 Some(结果)，否则 None。
+/// 查询路径（dup/big 页）用这个——索引缺失/断档时页面回落实时扫描，不触发全量回填；
+/// `--index` 用 `index_volume`（断档时回填）。
+fn index_volume_incremental_only(
+    index: &mut fileindex::FileIndex,
+    drive: &str,
+    quiet: bool,
+    do_hash: bool,
+) -> Option<IndexVolumeOutcome> {
+    let started = std::time::Instant::now();
+    let Some((serial, journal_id, first_usn, next_usn)) = mft::volume_usn_state(drive) else {
+        return None;
+    };
+    let Some((stored_journal_id, stored_next_usn)) = index.get_usn_state(serial) else {
+        return None;
+    };
+    if !fileindex::usn_state_usable(
+        stored_journal_id,
+        stored_next_usn,
+        journal_id,
+        first_usn,
+        next_usn,
+    ) {
+        return None;
+    }
+    let changes = mft::usn_changes_since(drive, stored_journal_id, stored_next_usn, &TOP_SKIP)?;
+    Some(index_volume_incremental(
+        index, drive, serial, changes, quiet, do_hash, started,
+    ))
+}
+
+/// 全量回填一卷：MFT 枚举 → 元数据 upsert → 游标写入 → 摘要复用/哈希管线 → 摘要写回。
+/// 游标在元数据落库后、哈希之前写（断点续跑：中断后续跑走增量，只补缺失摘要）。
+fn index_volume_backfill(
+    index: &mut fileindex::FileIndex,
+    drive: &str,
+    serial: u64,
+    journal_id: u64,
+    next_usn: i64,
+    quiet: bool,
+) -> IndexVolumeOutcome {
+    let started = std::time::Instant::now();
+    let stamp_now = now_seconds();
+    let entries = mft::scan_files(drive, fileindex::INDEX_MIN_SIZE, &TOP_SKIP);
+    // 先算好每个条目的 mtime（MFT 里没有时读文件属性，与 scan_dups 一致）；
+    // 遍历回退的条目没有 FRN，进不了索引（身份是 (卷序列号, FRN)）。
+    let total_entries = entries.len();
+    let mut resolved: Vec<(mft::FileEntry, u64)> = Vec::with_capacity(total_entries);
+    for e in entries {
+        if e.frn == 0 {
+            continue;
+        }
+        let mtime = if e.mtime != 0 {
+            e.mtime
+        } else {
+            file_mtime(&e.path)
+        };
+        resolved.push((e, mtime));
+    }
+    let skipped = total_entries - resolved.len();
+    let rows: Vec<fileindex::IndexRow> = resolved
+        .iter()
+        .map(|(e, mtime)| fileindex::IndexRow {
+            volume_serial: serial,
+            frn: e.frn,
+            path: e.path.clone(),
+            size: e.size,
+            mtime: *mtime,
+            last_seen: stamp_now,
+        })
+        .collect();
+    index.upsert_files(&rows);
+    // 游标先写（元数据之后、哈希之前）：中断后续跑走增量，只补缺失摘要，不重扫。
+    index.set_usn_state(serial, journal_id, next_usn);
+
+    // 复用摘要缓存：已有 (path,size,mtime) 有效摘要的直接拷进索引。
+    let mut cache =
+        hashcache::HashCache::load_for_paths(resolved.iter().map(|(e, _)| e.path.as_str()));
+    let mut reused: HashSet<(u64, u64)> = HashSet::new();
+    let mut reuse_updates: Vec<fileindex::DigestUpdate> = Vec::new();
+    for (e, mtime) in &resolved {
+        if let Some(entry) = cache.entry_for(&e.path, e.size, *mtime) {
+            if entry.full.is_some() {
+                reused.insert((serial, e.frn));
+            }
+            if entry.head.is_some()
+                || entry.sample.is_some()
+                || entry.strong.is_some()
+                || entry.full.is_some()
+            {
+                reuse_updates.push(fileindex::DigestUpdate {
+                    volume_serial: serial,
+                    frn: e.frn,
+                    size: e.size,
+                    mtime: *mtime,
+                    head: entry.head,
+                    sample: entry.sample,
+                    strong: entry.strong,
+                    full: entry.full,
+                });
+            }
+        }
+    }
+    let reused_full = reused.len() as u64;
+    index.set_digests_batch(&reuse_updates);
+
+    // 按 size 分组，只有 ≥2 个文件同 size 的组才进哈希管线（大小唯一的零 I/O 排除，
+    // 与 scan_dups 同一条规则）。
+    let mut by_size: HashMap<u64, Vec<DupCandidate>> = HashMap::new();
+    let mut disk_cache: HashMap<char, DiskKey> = HashMap::new();
+    for (entry, mtime) in resolved {
+        let size = entry.size;
+        let candidate = dup_candidate_from_file_entry(entry, mtime, &cache, &mut disk_cache);
+        by_size.entry(size).or_default().push(candidate);
+    }
+    let (ready_final, ssd_only_stage1, mixed_stage1) = split_dup_candidates(by_size, false);
+
+    let (final_items, eliminated_items) = run_dup_pipelines(
+        ssd_only_stage1,
+        mixed_stage1,
+        &mut cache,
+        stamp_now,
+        false,
+        false,
+        "index-ssd",
+        "index-hdd",
+        false,
+    );
+    let mut hashed_items = final_items;
+    hashed_items.extend(eliminated_items);
+
+    // 管线算出的摘要（以及 ready 组里已有的）写回索引，按 (size, mtime) 校验。
+    let mut updates: Vec<fileindex::DigestUpdate> = Vec::new();
+    for item in ready_final.values().flatten().chain(hashed_items.iter()) {
+        if item.head.is_some()
+            || item.sample.is_some()
+            || item.strong.is_some()
+            || item.full.is_some()
+        {
+            updates.push(fileindex::DigestUpdate {
+                volume_serial: serial,
+                frn: item.frn,
+                size: item.size,
+                mtime: item.mtime,
+                head: item.head,
+                sample: item.sample,
+                strong: item.strong,
+                full: item.full,
+            });
+        }
+    }
+    index.set_digests_batch(&updates);
+    let newly = hashed_items
+        .iter()
+        .filter(|c| c.full.is_some() && !reused.contains(&(serial, c.frn)))
+        .count() as u64;
+    let elapsed = started.elapsed().as_secs_f64();
+    let line = format!(
+        "index: {} 文件 {} 个（跳过无 FRN {} 个），复用缓存 {} 个，新算 {} 个，用时 {:.1}s",
+        drive,
+        rows.len(),
+        skipped,
+        reused_full,
+        newly,
+        elapsed
+    );
+    if !quiet {
+        println!("{}", line);
+    }
+    index_log(&line);
+    IndexVolumeOutcome {
+        status: IndexVolumeStatus::Backfilled,
+        files: rows.len() as u64,
+        deleted: 0,
+        renamed: 0,
+        reused_full,
+        hashed_new: newly,
+        elapsed_secs: elapsed,
+    }
+}
+
+/// `--index` 入口：逐卷索引（增量优先，断档回填），`--rebuild` 强制全量重建。
+/// 退出码：0 全部成功，1 部分卷失败，2 非管理员。
+fn run_index(quiet: bool, rebuild: bool) -> i32 {
+    if !is_admin() {
+        eprintln!("--index 需要管理员权限：请用管理员身份运行（计划任务请用最高权限）。");
+        return 2;
+    }
+    let drives = fixed_drives();
+    if drives.is_empty() {
+        eprintln!("--index：没有找到固定磁盘。");
+        return 1;
+    }
+    let mut index = match fileindex::FileIndex::open_default() {
+        Some(index) => index,
+        None => {
+            eprintln!("--index：打不开索引库。");
+            return 1;
+        }
+    };
+    let (summary, ok) = index_all_drives(&mut index, &drives, quiet, rebuild);
+    if !quiet {
+        println!("{}", summary);
+    }
+    index_log(&summary);
+    if ok {
+        0
+    } else {
+        1
+    }
+}
+
+// ---------- 索引查询（Phase 3） ----------
+
+/// 索引新鲜度（查询前每卷一次 QUERY_USN_JOURNAL）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IndexFreshness {
+    /// 游标与当前一致，直接查。
+    Fresh,
+    /// 落后但在日志内，先增量追赶再查。
+    Behind,
+    /// 断档（日志重建 / 游标超出范围），回落实时扫描。
+    Gap,
+    /// 该卷没有索引（无游标），回落实时扫描。
+    Missing,
+    /// 卷打不开（非管理员 / 盘符没了），回落实时扫描。
+    Unavailable,
+}
+
+/// 由已取到的卷状态算新鲜度（`volume_usn_state` 的返回值直接传进来，避免重复开卷）。
+fn freshness_from_state(
+    index: &fileindex::FileIndex,
+    serial: u64,
+    journal_id: u64,
+    first_usn: i64,
+    next_usn: i64,
+) -> IndexFreshness {
+    let Some((stored_journal_id, stored_next_usn)) = index.get_usn_state(serial) else {
+        return IndexFreshness::Missing;
+    };
+    if !fileindex::usn_state_usable(
+        stored_journal_id,
+        stored_next_usn,
+        journal_id,
+        first_usn,
+        next_usn,
+    ) {
+        return IndexFreshness::Gap;
+    }
+    if stored_next_usn == next_usn {
+        IndexFreshness::Fresh
+    } else {
+        IndexFreshness::Behind
+    }
+}
+
+/// 查询前确保一卷新鲜：Fresh 直接用；Behind 跑一次增量（仅增量，不回填）；
+/// 其余返回原值（调用方回落实时扫描）。
+/// `do_hash`：重复页 true（需要摘要），大文件页 false（只要元数据）。
+/// 返回（新鲜度，卷序列号）。
+fn ensure_index_scope_fresh(
+    index: &mut fileindex::FileIndex,
+    drive: &str,
+    do_hash: bool,
+) -> (IndexFreshness, Option<u64>) {
+    let Some((serial, journal_id, first_usn, next_usn)) = mft::volume_usn_state(drive) else {
+        return (IndexFreshness::Unavailable, None);
+    };
+    let freshness = freshness_from_state(index, serial, journal_id, first_usn, next_usn);
+    if freshness != IndexFreshness::Behind {
+        return (freshness, Some(serial));
+    }
+    match index_volume_incremental_only(index, drive, true, do_hash) {
+        Some(outcome) => match outcome.status {
+            IndexVolumeStatus::Incremented | IndexVolumeStatus::Backfilled => {
+                (IndexFreshness::Fresh, Some(serial))
+            }
+            IndexVolumeStatus::Failed => (IndexFreshness::Gap, Some(serial)),
+        },
+        None => (IndexFreshness::Gap, Some(serial)),
+    }
+}
+
+/// 解析 scan_dups/scan_big 的一个 root：返回（盘符 "C:\"，子目录前缀或 None）。
+/// 盘符根（"C:\"/"C:"）→ 整卷；子目录（用户目录）→ 该卷 + 前缀。
+fn parse_index_scope_root(root: &str) -> Option<(String, Option<String>)> {
+    let trimmed = root.trim_end_matches('\\');
+    let letter = trimmed.chars().next()?;
+    if trimmed.len() < 2 || trimmed.as_bytes()[1] != b':' || !letter.is_ascii_alphabetic() {
+        return None;
+    }
+    let drive = format!("{}:\\", letter.to_ascii_uppercase());
+    let prefix = if trimmed.len() > 2 {
+        Some(trimmed.to_string())
+    } else {
+        None
+    };
+    Some((drive, prefix))
+}
+
+/// `path` 是否在目录 `dir_prefix` 之下（不含目录本身；边界必须是 `\`）。
+/// 大小写不敏感（Windows 路径），按字节边界安全切片（中文目录名不 panic）。
+fn path_under_dir(path: &str, dir_prefix: &str) -> bool {
+    let Some(head) = path.get(..dir_prefix.len()) else {
+        return false;
+    };
+    head.eq_ignore_ascii_case(dir_prefix)
+        && path
+            .as_bytes()
+            .get(dir_prefix.len())
+            .map(|b| *b == b'\\')
+            .unwrap_or(false)
+}
+
+/// 重复页查索引：返回 Some(组) 表示索引可用且完整；None 表示回落实时扫描。
+/// 完整性保证：任一 size 组有成员缺所需摘要（fast→strong，否则 full）即回落，
+/// 索引路径永不漏报。系统文件（pagefile.sys 等）与实时扫描一致，排除。
+fn query_dups_from_index(
+    index: &mut fileindex::FileIndex,
+    roots: &[String],
+    min_size: u64,
+    fast: bool,
+) -> Option<Vec<DupGroup>> {
+    if min_size < fileindex::INDEX_MIN_SIZE {
+        return None;
+    }
+    let mut scopes: Vec<(u64, Option<String>)> = Vec::new();
+    for root in roots {
+        let (drive, prefix) = parse_index_scope_root(root)?;
+        let (freshness, serial) = ensure_index_scope_fresh(index, &drive, true);
+        if freshness != IndexFreshness::Fresh {
+            return None;
+        }
+        let Some(serial) = serial else {
+            return None;
+        };
+        scopes.push((serial, prefix));
+    }
+    if scopes.is_empty() {
+        return None;
+    }
+    let serials: Vec<u64> = scopes.iter().map(|(s, _)| *s).collect();
+    let rows = index.query_dup_rows(&serials, min_size);
+    // 子目录作用域：只留该卷下前缀内的行；系统文件排除。
+    let rows: Vec<fileindex::IndexDupRow> = rows
+        .into_iter()
+        .filter(|r| !is_system_file_name(&r.path))
+        .filter(|r| {
+            scopes.iter().any(|(serial, prefix)| {
+                *serial == r.volume_serial
+                    && match prefix {
+                        None => true,
+                        Some(prefix) => path_under_dir(&r.path, prefix),
+                    }
+            })
+        })
+        .collect();
+    // 按 size 分组：组内任一成员缺所需摘要 → 不完整，回落实时扫描。
+    let mut by_size: HashMap<u64, Vec<fileindex::IndexDupRow>> = HashMap::new();
+    for r in rows {
+        by_size.entry(r.size).or_default().push(r);
+    }
+    let mut by_hash: HashMap<(u64, hashcache::Digest), Vec<DupCandidate>> = HashMap::new();
+    for bucket in by_size.into_values() {
+        if bucket.len() < 2 {
+            continue;
+        }
+        let digest_of = |r: &fileindex::IndexDupRow| if fast { r.strong } else { r.full };
+        if bucket.iter().any(|r| digest_of(r).is_none()) {
+            return None;
+        }
+        for r in bucket {
+            let digest = digest_of(&r).unwrap();
+            // 索引里一 FRN 一行，硬链接天然去重；file_id 直接填 (卷序列号低 32 位, FRN)，
+            // 让 build_dup_groups 跳过逐文件的 query_file_identity。
+            by_hash
+                .entry((r.size, digest))
+                .or_default()
+                .push(DupCandidate {
+                    path: r.path,
+                    size: r.size,
+                    mtime: r.mtime,
+                    sort_key: 0,
+                    frn: r.frn,
+                    first_lcn: 0,
+                    bytes_per_cluster: 0,
+                    can_raw_read: false,
+                    is_ssd: false,
+                    file_id: Some((r.volume_serial as u32, r.frn)),
+                    head: r.head,
+                    sample: r.sample,
+                    strong: r.strong,
+                    full: r.full,
+                    probe: None,
+                    dirty_head: false,
+                    dirty_sample: false,
+                    dirty_strong: false,
+                    dirty_full: false,
+                });
+        }
+    }
+    let mut groups = build_dup_groups(by_hash);
+    sort_dup_groups(&mut groups);
+    Some(groups)
+}
+
+/// 大文件页查索引：返回 Some(行) 表示索引可用；None 表示回落实时扫描。
+/// 只追赶元数据（do_hash=false，不哈希）；索引缺失/断档时不回填，直接回落。
+fn query_big_from_index(
+    index: &mut fileindex::FileIndex,
+    drives: &[String],
+) -> Option<Vec<BigFile>> {
+    let mut serials: Vec<u64> = Vec::new();
+    for drive in drives {
+        let (freshness, serial) = ensure_index_scope_fresh(index, drive, false);
+        if freshness != IndexFreshness::Fresh {
+            return None;
+        }
+        let Some(serial) = serial else {
+            return None;
+        };
+        serials.push(serial);
+    }
+    if serials.is_empty() {
+        return None;
+    }
+    let rows = index.query_big_rows(&serials);
+    let mut out: Vec<BigFile> = rows
+        .into_iter()
+        .filter(|r| !is_system_file_name(&r.path))
+        .filter(|r| r.size >= big_file_threshold_bytes(&r.path))
+        .map(|r| BigFile {
+            path: r.path,
+            size: r.size,
+            mtime: r.mtime,
+        })
+        .collect();
+    out.sort_by(|a, b| b.size.cmp(&a.size));
+    Some(out)
+}
+
+/// 一卷的索引状态（UI 用）。
+#[derive(Serialize)]
+struct IndexVolumeState {
+    drive: String,
+    /// fresh | behind | stale | missing | unavailable
+    state: String,
+    files: u64,
+    with_full: u64,
+    /// USN 游标更新时间（unix 秒），没有游标时 0。
+    updated_at: u64,
+}
+
+#[derive(Serialize)]
+struct IndexState {
+    volumes: Vec<IndexVolumeState>,
+}
+
+/// UI 的索引状态：逐卷新鲜度 + 行数 + 游标时间。只读，不触发同步。
+#[tauri::command(async)]
+fn index_status() -> IndexState {
+    let mut volumes = Vec::new();
+    let index = fileindex::FileIndex::open_default();
+    for drive in fixed_drives() {
+        let (state, files, with_full, updated_at) = match &index {
+            Some(idx) => match mft::volume_usn_state(&drive) {
+                Some((serial, journal_id, first_usn, next_usn)) => {
+                    let (files, with_full) = idx.volume_counts(serial);
+                    let updated_at = idx.usn_state_updated_at(serial).unwrap_or(0);
+                    let state = match idx.get_usn_state(serial) {
+                        None => "missing",
+                        Some((stored_journal_id, stored_next_usn)) => {
+                            if !fileindex::usn_state_usable(
+                                stored_journal_id,
+                                stored_next_usn,
+                                journal_id,
+                                first_usn,
+                                next_usn,
+                            ) {
+                                "stale"
+                            } else if stored_next_usn == next_usn {
+                                "fresh"
+                            } else {
+                                "behind"
+                            }
+                        }
+                    };
+                    (state.to_string(), files, with_full, updated_at)
+                }
+                None => ("unavailable".to_string(), 0, 0, 0),
+            },
+            None => ("missing".to_string(), 0, 0, 0),
+        };
+        volumes.push(IndexVolumeState {
+            drive,
+            state,
+            files,
+            with_full,
+            updated_at,
+        });
+    }
+    IndexState { volumes }
+}
+
+/// 逐卷索引并返回汇总行（`--index` 与 UI 的"立即同步"/"重建索引"共用）。
+/// 返回（汇总行，是否全部成功）。
+fn index_all_drives(
+    index: &mut fileindex::FileIndex,
+    drives: &[String],
+    quiet: bool,
+    rebuild: bool,
+) -> (String, bool) {
+    let mut failed: Vec<String> = Vec::new();
+    let mut total_files: u64 = 0;
+    let mut total_hashed: u64 = 0;
+    let mut total_reused: u64 = 0;
+    let mut total_incremented: u64 = 0;
+    let mut total_deleted: u64 = 0;
+    let mut total_renamed: u64 = 0;
+    let mut total_elapsed: f64 = 0.0;
+    for drive in drives {
+        let outcome = index_volume(index, drive, quiet, true, rebuild);
+        total_files += outcome.files;
+        total_hashed += outcome.hashed_new;
+        total_reused += outcome.reused_full;
+        total_deleted += outcome.deleted;
+        total_renamed += outcome.renamed;
+        total_elapsed += outcome.elapsed_secs;
+        if outcome.status == IndexVolumeStatus::Incremented {
+            total_incremented += 1;
+        }
+        if outcome.status == IndexVolumeStatus::Failed {
+            failed.push(drive.clone());
+        }
+    }
+    let (files, with_full) = index.counts();
+    let summary = format!(
+        "index: 本次 {} 个文件（其中 {} 卷增量，删 {} 行，路径修正 {} 个），复用缓存 {} 个，新算 {} 个，用时 {:.1}s；库中共 {} 个文件（{} 个有 full 摘要）{}",
+        total_files,
+        total_incremented,
+        total_deleted,
+        total_renamed,
+        total_reused,
+        total_hashed,
+        total_elapsed,
+        files,
+        with_full,
+        if failed.is_empty() {
+            String::new()
+        } else {
+            format!("；失败的卷：{}", failed.join("、"))
+        }
+    );
+    (summary, failed.is_empty())
+}
+
+/// UI 的"立即同步"：逐卷增量追赶（断档回填），返回汇总行。耗时操作，前端会等它完成。
+#[tauri::command(async)]
+fn index_sync_now() -> String {
+    if !is_admin() {
+        return "--index 需要管理员权限。".to_string();
+    }
+    let drives = fixed_drives();
+    let mut index = match fileindex::FileIndex::open_default() {
+        Some(index) => index,
+        None => return "--index：打不开索引库。".to_string(),
+    };
+    let (summary, _) = index_all_drives(&mut index, &drives, true, false);
+    index_log(&summary);
+    summary
+}
+
+/// UI 的"重建索引"：清掉全部索引行和游标，全量重建。耗时操作，前端会等它完成。
+#[tauri::command(async)]
+fn index_rebuild() -> String {
+    if !is_admin() {
+        return "--index 需要管理员权限。".to_string();
+    }
+    let drives = fixed_drives();
+    let mut index = match fileindex::FileIndex::open_default() {
+        Some(index) => index,
+        None => return "--index：打不开索引库。".to_string(),
+    };
+    let (summary, _) = index_all_drives(&mut index, &drives, true, true);
+    index_log(&summary);
+    summary
+}
+
+#[derive(Serialize)]
+struct IndexTaskState {
+    exists: bool,
+    enabled: bool,
+}
+
+/// UI 的计划任务状态：是否已注册、是否启用。只读，不触发注册。
+#[tauri::command(async)]
+fn index_task_status() -> IndexTaskState {
+    let (exists, enabled) = indextask::task_status();
+    IndexTaskState { exists, enabled }
+}
+
+/// UI 的"运行计划任务"：手动跑一次 `\CDriveCleaner\Index`（后台执行）。
+/// 这也是 S4U 提权的验证入口——跑完读索引日志确认走 MFT 路径且 exit 0。
+#[tauri::command(async)]
+fn index_task_run() -> String {
+    match indextask::run_task() {
+        Ok(msg) => {
+            index_log(&format!("计划任务：{}", msg));
+            msg
+        }
+        Err(e) => e,
+    }
+}
+
+/// UI 的启用 / 禁用计划任务。
+#[tauri::command(async)]
+fn index_task_set_enabled(enabled: bool) -> String {
+    match indextask::set_task_enabled(enabled) {
+        Ok(msg) => {
+            index_log(&format!("计划任务：{}", msg));
+            msg
+        }
+        Err(e) => e,
+    }
+}
+
+/// UI 的手动重注册（启动时已提权的前提下已在后台幂等注册过一次）。
+#[tauri::command(async)]
+fn index_task_register() -> String {
+    match indextask::register_task() {
+        Ok(msg) => {
+            index_log(&format!("计划任务：{}", msg));
+            msg
+        }
+        Err(e) => e,
+    }
+}
+
+/// 删除计划任务（卸载流程用；UI 不提供按钮）。
+#[tauri::command(async)]
+fn index_task_delete() -> String {
+    match indextask::delete_task() {
+        Ok(msg) => {
+            index_log(&format!("计划任务：{}", msg));
+            msg
+        }
+        Err(e) => e,
+    }
+}
+
 /// 命令行自检：不打开窗口，直接跑一遍后端扫描，方便在没有界面的环境里验证。
 fn run_selftest() {
     let start = std::time::Instant::now();
@@ -2607,7 +3617,21 @@ fn main() {
         run_selftest();
         return;
     }
+    // --index 在建任何窗口之前分支出命令行模式：计划任务在非交互会话里触发它，
+    // 不能起 WebView，也不能弹 UAC（未提权时 run_index 直接报错退出）。
+    if std::env::args().any(|arg| arg == "--index") {
+        let quiet = std::env::args().any(|arg| arg == "--quiet");
+        let rebuild = std::env::args().any(|arg| arg == "--rebuild");
+        std::process::exit(run_index(quiet, rebuild));
+    }
     ensure_admin();
+    // 已提权的前提下，后台幂等重注册每日 03:00 的索引计划任务（`/f` 覆盖）。
+    // 不阻塞启动：注册失败只记索引日志。非提权时 ensure_admin 已重走 UAC，
+    // 能走到这里的一定是提权进程。
+    std::thread::spawn(|| match indextask::register_task() {
+        Ok(msg) => index_log(&format!("计划任务：{}", msg)),
+        Err(e) => index_log(&format!("计划任务注册失败：{}", e)),
+    });
     // 上次搬家如果停在"改名"和"建联接"之间，先把数据目录还原回去。
     system::recover_pending_move();
     tauri::Builder::default()
@@ -2619,6 +3643,14 @@ fn main() {
             scan_categories,
             scan_big,
             scan_dups,
+            index_status,
+            index_sync_now,
+            index_rebuild,
+            index_task_status,
+            index_task_run,
+            index_task_set_enabled,
+            index_task_register,
+            index_task_delete,
             user_profile,
             delete_recycle,
             delete_dups,
