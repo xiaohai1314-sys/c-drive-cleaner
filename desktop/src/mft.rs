@@ -12,6 +12,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
 const GENERIC_READ: u32 = 0x8000_0000;
@@ -149,11 +150,34 @@ impl Drop for VolumeHandle {
     }
 }
 
+/// 按文件名与大小在拼完整路径之前提前剪枝的过滤器。
+pub type KeepFn<'a> = &'a (dyn Fn(&str, u64) -> bool + Sync);
+
 pub fn scan_files(root: &str, min_size: u64, skip_top: &[&str]) -> Vec<FileEntry> {
-    if let Some(entries) = try_mft_scan(root, min_size, skip_top) {
+    scan_files_where(root, min_size, skip_top, &|_, _| true)
+}
+
+/// 与 `scan_files` 相同，但 `keep(文件名, 大小)` 返回 false 的条目在解析父目录、
+/// 拼接路径之前就被丢弃。大文件分档阈值这类只看扩展名的过滤放在这里最省。
+pub fn scan_files_where(
+    root: &str,
+    min_size: u64,
+    skip_top: &[&str],
+    keep: KeepFn,
+) -> Vec<FileEntry> {
+    if let Some(entries) = try_mft_scan(root, min_size, skip_top, keep) {
         return entries;
     }
     fallback_walk_files(root, min_size, skip_top)
+        .into_iter()
+        .filter(|e| {
+            let name = Path::new(&e.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            keep(&name, e.size)
+        })
+        .collect()
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -660,6 +684,7 @@ fn read_single_mft_record(
     Some((actual_frn, rec_len))
 }
 
+#[derive(Clone)]
 struct MftSnapshot {
     volume_serial: u64,
     journal_id: u64,
@@ -668,6 +693,36 @@ struct MftSnapshot {
     bytes_per_cluster: u32,
     dirs: HashMap<u64, DirNode>,
     files: HashMap<u64, RawFile>,
+}
+
+/// 进程内快照缓存：大文件页与重复文件页共用，避免每次都从磁盘反序列化整份快照。
+/// 以卷序列号为键；是否仍有效由调用方用 journal_id / next_usn 判断。
+fn mem_snapshots() -> &'static Mutex<HashMap<u64, Arc<MftSnapshot>>> {
+    static CELL: OnceLock<Mutex<HashMap<u64, Arc<MftSnapshot>>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn mem_snapshot_get(serial: u64) -> Option<Arc<MftSnapshot>> {
+    mem_snapshots().lock().ok()?.get(&serial).cloned()
+}
+
+fn mem_snapshot_put(serial: u64, snap: Arc<MftSnapshot>) {
+    if let Ok(mut map) = mem_snapshots().lock() {
+        map.insert(serial, snap);
+    }
+}
+
+fn mem_snapshot_take(serial: u64) -> Option<Arc<MftSnapshot>> {
+    mem_snapshots().lock().ok()?.remove(&serial)
+}
+
+/// 后台落盘快照，不阻塞本次扫描返回。同一时刻只允许一个写入，避免临时文件互相覆盖。
+fn save_snapshot_in_background(path: PathBuf, snap: Arc<MftSnapshot>) {
+    static SAVE_LOCK: Mutex<()> = Mutex::new(());
+    std::thread::spawn(move || {
+        let _guard = SAVE_LOCK.lock();
+        let _ = save_snapshot(&path, &snap);
+    });
 }
 
 fn snapshot_path(serial: u64) -> PathBuf {
@@ -1136,7 +1191,12 @@ fn resolve_dir(
     }
     Some(path)
 }
-pub fn try_mft_scan(root: &str, min_size: u64, skip_top: &[&str]) -> Option<Vec<FileEntry>> {
+pub fn try_mft_scan(
+    root: &str,
+    min_size: u64,
+    skip_top: &[&str],
+    keep: KeepFn,
+) -> Option<Vec<FileEntry>> {
     let trimmed = root.trim_end_matches('\\');
     let letter = trimmed.chars().next()?;
     if trimmed.len() < 2 || trimmed.as_bytes()[1] != b':' || !letter.is_ascii_alphabetic() {
@@ -1198,21 +1258,27 @@ pub fn try_mft_scan(root: &str, min_size: u64, skip_top: &[&str]) -> Option<Vec<
         min_size
     };
 
-    let mut snapshot_opt: Option<(HashMap<u64, DirNode>, HashMap<u64, RawFile>)> = None;
+    let mut snapshot_opt: Option<Arc<MftSnapshot>> = None;
 
     if let Some(journal) = usn_now {
-        if let Some(mut snap) = load_snapshot(&snap_file) {
+        let cached = mem_snapshot_get(serial)
+            .or_else(|| load_snapshot(&snap_file).map(Arc::new));
+        if let Some(snap) = cached {
             if snap.volume_serial == serial
                 && snap.journal_id == journal.usn_journal_id
                 && snap.bytes_per_cluster == bytes_per_cluster as u32
                 && snap.min_size <= min_size
             {
                 if snap.next_usn == journal.next_usn {
-                    snapshot_opt = Some((snap.dirs, snap.files));
+                    mem_snapshot_put(serial, snap.clone());
+                    snapshot_opt = Some(snap);
                 } else if snap.next_usn >= journal.first_usn && snap.next_usn < journal.next_usn {
                     if let Some(changed) =
                         collect_usn_changed_indices(handle.0, &journal, snap.next_usn)
                     {
+                        // 取出独占所有权再原地更新；仍被其他扫描持有时才退化为克隆。
+                        drop(mem_snapshot_take(serial));
+                        let mut snap = Arc::try_unwrap(snap).unwrap_or_else(|a| (*a).clone());
                         let mut out_buf = vec![0u8; 16 + record_size];
                         for idx in changed {
                             snap.dirs.remove(&idx);
@@ -1241,16 +1307,18 @@ pub fn try_mft_scan(root: &str, min_size: u64, skip_top: &[&str]) -> Option<Vec<
                             }
                         }
                         snap.next_usn = journal.next_usn;
-                        let _ = save_snapshot(&snap_file, &snap);
-                        snapshot_opt = Some((snap.dirs, snap.files));
+                        let snap = Arc::new(snap);
+                        mem_snapshot_put(serial, snap.clone());
+                        save_snapshot_in_background(snap_file.clone(), snap.clone());
+                        snapshot_opt = Some(snap);
                     }
                 }
             }
         }
     }
 
-    let (dirs, files) = match snapshot_opt {
-        Some(pair) => pair,
+    let snap: Arc<MftSnapshot> = match snapshot_opt {
+        Some(s) => s,
         None => {
             let mut first = vec![0u8; record_size];
             if read_exact_at(
@@ -1272,23 +1340,24 @@ pub fn try_mft_scan(root: &str, min_size: u64, skip_top: &[&str]) -> Option<Vec<
                 _ => return None,
             };
             let (dirs, files) = full_mft_read_parallel(handle.0, &volume, runs, store_min_size)?;
-            if let Some(journal) = usn_now {
-                if store_min_size >= SNAPSHOT_FLOOR_MIN_SIZE {
-                    let snap = MftSnapshot {
-                        volume_serial: serial,
-                        journal_id: journal.usn_journal_id,
-                        next_usn: journal.next_usn,
-                        min_size: store_min_size,
-                        bytes_per_cluster: bytes_per_cluster as u32,
-                        dirs: dirs.clone(),
-                        files: files.clone(),
-                    };
-                    let _ = save_snapshot(&snap_file, &snap);
-                }
+            let snap = Arc::new(MftSnapshot {
+                volume_serial: serial,
+                journal_id: usn_now.map(|j| j.usn_journal_id).unwrap_or(0),
+                next_usn: usn_now.map(|j| j.next_usn).unwrap_or(0),
+                min_size: store_min_size,
+                bytes_per_cluster: bytes_per_cluster as u32,
+                dirs,
+                files,
+            });
+            if usn_now.is_some() && store_min_size >= SNAPSHOT_FLOOR_MIN_SIZE {
+                mem_snapshot_put(serial, snap.clone());
+                save_snapshot_in_background(snap_file.clone(), snap.clone());
             }
-            (dirs, files)
+            snap
         }
     };
+    let dirs = &snap.dirs;
+    let files = &snap.files;
 
     let is_drive_root = trimmed.len() == 2;
     let root_lower = trimmed.to_lowercase();
@@ -1299,8 +1368,8 @@ pub fn try_mft_scan(root: &str, min_size: u64, skip_top: &[&str]) -> Option<Vec<
     let mut dir_cache: HashMap<u64, Option<String>> = HashMap::with_capacity(dirs.len().min(65536));
     let mut entries = Vec::with_capacity(files.len());
 
-    for raw in files.into_values() {
-        if raw.size < min_size {
+    for raw in files.values() {
+        if raw.size < min_size || !keep(&raw.name, raw.size) {
             continue;
         }
         let dir_path = if (raw.parent_frn & 0xFFFF_FFFF_FFFF) == 5 {
@@ -1308,7 +1377,7 @@ pub fn try_mft_scan(root: &str, min_size: u64, skip_top: &[&str]) -> Option<Vec<
         } else {
             let Some(p) = resolve_dir(
                 raw.parent_frn,
-                &dirs,
+                dirs,
                 &mut dir_cache,
                 &drive,
                 is_drive_root,
@@ -1540,6 +1609,29 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert!(found[0].path.ends_with("big.bin"));
         assert_eq!(found[0].size, 2048);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scan_files_where_drops_rejected_names_before_returning() {
+        let dir = std::env::temp_dir().join("cdc-mft-keep-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub").join("wanted.txt"), vec![1u8; 4096]).unwrap();
+        std::fs::write(dir.join("sub").join("unwanted.bin"), vec![1u8; 4096]).unwrap();
+
+        let seen_bad_name = std::sync::atomic::AtomicBool::new(false);
+        let keep = |name: &str, _size: u64| {
+            if name.contains('\\') || name.contains('/') {
+                seen_bad_name.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            name.ends_with(".txt")
+        };
+        let found = scan_files_where(&dir.to_string_lossy(), 1024, &[], &keep);
+        assert!(!seen_bad_name.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(found.iter().all(|e| e.path.ends_with("wanted.txt")));
+        assert!(!found.iter().any(|e| e.path.ends_with("unwanted.bin")));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

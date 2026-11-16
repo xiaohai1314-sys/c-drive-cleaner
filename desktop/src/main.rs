@@ -742,8 +742,11 @@ fn scan_big(drives: Option<Vec<String>>) -> Vec<BigFile> {
             if scan_was_cancelled("big") {
                 return Vec::new();
             }
-            // 按最低档 2MB（文档/图片/日志）枚举，其余类型在下面按扩展名再过滤。
-            mft::scan_files(&drive, 2 * 1024 * 1024, &TOP_SKIP)
+            // 按最低档 2MB（文档/图片/日志）枚举；分档阈值在 MFT 层按文件名先过滤，
+            // 不达标的文件不再解析父目录、拼接完整路径。
+            mft::scan_files_where(&drive, 2 * 1024 * 1024, &TOP_SKIP, &|name, size| {
+                size >= big_file_threshold_bytes(name)
+            })
         },
     );
     let mut rows: Vec<BigFile> = per_drive
@@ -810,12 +813,23 @@ fn build_dup_groups(
     by_hash: HashMap<(u64, hashcache::Digest), Vec<DupCandidate>>,
 ) -> Vec<DupGroup> {
     let mut groups: Vec<DupGroup> = Vec::new();
+    // 只有候选组（≥2 个文件）才需要硬链接去重；缺 file_id 的条目并行补查，
+    // 避免对缓存命中的大批文件逐个串行打开句柄。
+    let mut by_hash: Vec<((u64, hashcache::Digest), Vec<DupCandidate>)> = by_hash
+        .into_iter()
+        .filter(|(_, items)| items.len() >= 2)
+        .collect();
+    by_hash.par_iter_mut().for_each(|(_, items)| {
+        items.par_iter_mut().for_each(|item| {
+            if item.file_id.is_none() {
+                item.file_id = fastio::query_file_identity(Path::new(&item.path));
+            }
+        });
+    });
     for ((size, digest), mut items) in by_hash {
         let mut seen_inodes: HashSet<(u32, u64)> = HashSet::new();
         items.retain(|item| {
-            let fid = item
-                .file_id
-                .or_else(|| fastio::query_file_identity(Path::new(&item.path)));
+            let fid = item.file_id;
             match fid {
                 Some(id) => seen_inodes.insert(id),
                 None => true,
