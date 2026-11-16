@@ -689,6 +689,48 @@ fn is_reparse(meta: &std::fs::Metadata) -> bool {
 
 // ---------- 命令：大文件 ----------
 
+/// 大文件按类型分档阈值（字节），取自毒霸 kbigfile.dat（v2024.07.12.1，12 条 suffix 规则）。
+/// 分组与前端 kindOf 的页签对齐；未列出的扩展名走兜底 50MB（毒霸 id 120 的 `*` 规则）。
+/// 毒霸的 gif 同时出现在视频（20MB）和图片（2MB）两条规则里，这里按前端的归类算图片 2MB。
+fn big_file_threshold_bytes(path: &str) -> u64 {
+    const MB: u64 = 1024 * 1024;
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        // 安装包 100MB（毒霸 id 1：exe|msi）
+        "exe" | "msi" => 100 * MB,
+        // 视频 20MB（毒霸 id 4）
+        "mp4" | "avi" | "mov" | "mkv" | "wmv" | "flv" | "m4v" | "3gp" | "mpeg" | "mpg" | "ts"
+        | "webm" | "rmvb" | "vob" | "dv" | "swf" => 20 * MB,
+        // 临时文件 20MB（毒霸 id 9：tmp）
+        "tmp" => 20 * MB,
+        // 音频 5MB（毒霸 id 5）
+        "mp3" | "ape" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "ac3" | "dts" | "mka" | "opus"
+        | "wma" | "mid" => 5 * MB,
+        // 压缩包 5MB（毒霸 id 2）
+        "zip" | "rar" | "7z" | "gz" | "iso" | "img" | "tar" | "bz2" | "xz" | "cab" | "fzip"
+        | "rar4" => 5 * MB,
+        // 手机安装包 5MB（毒霸 id 3：apk|ipa|ipsw）
+        "apk" | "ipa" | "ipsw" => 5 * MB,
+        // 其他打包/调试文件 5MB（毒霸 id 119：pack|wim|pima|lib|pdb|rb|torrent）
+        "pack" | "wim" | "pima" | "lib" | "pdb" | "rb" | "torrent" => 5 * MB,
+        // 图片 2MB（毒霸 id 118）
+        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp" | "heic" | "ico"
+        | "raw" | "psd" | "svg" => 2 * MB,
+        // 文档 2MB（毒霸 id 8）
+        "txt" | "csv" | "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odf"
+        | "wps" | "wpt" | "dot" | "dotx" | "docm" | "xlsm" | "rtf" | "odt" | "dwg" | "dxf"
+        | "md" | "et" | "dps" | "ofd" | "xmind" | "vsdx" => 2 * MB,
+        // 日志 2MB（毒霸 id 6）
+        "log" | "xlog" | "dump" | "dmp" | "lg" | "tlg" | "ttd" | "xltd" => 2 * MB,
+        // 兜底 50MB（毒霸 id 120 的 `*` 规则）
+        _ => 50 * MB,
+    }
+}
+
 #[tauri::command(async)]
 fn scan_big(drives: Option<Vec<String>>) -> Vec<BigFile> {
     scan_begin("big", "大文件扫描");
@@ -700,13 +742,15 @@ fn scan_big(drives: Option<Vec<String>>) -> Vec<BigFile> {
             if scan_was_cancelled("big") {
                 return Vec::new();
             }
-            mft::scan_files(&drive, 100 * 1024 * 1024, &TOP_SKIP)
+            // 按最低档 2MB（文档/图片/日志）枚举，其余类型在下面按扩展名再过滤。
+            mft::scan_files(&drive, 2 * 1024 * 1024, &TOP_SKIP)
         },
     );
     let mut rows: Vec<BigFile> = per_drive
         .into_iter()
         .flatten()
         .filter(|entry| !is_system_file_name(&entry.path))
+        .filter(|entry| entry.size >= big_file_threshold_bytes(&entry.path))
         .map(|entry| BigFile {
             mtime: if entry.mtime != 0 {
                 entry.mtime
@@ -2888,5 +2932,23 @@ mod delete_tests {
             assert_eq!(groups[0].files.len(), 2);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn big_file_thresholds_follow_kbigfile_tiers() {
+        const MB: u64 = 1024 * 1024;
+        assert_eq!(big_file_threshold_bytes("C:\\a\\setup.exe"), 100 * MB);
+        assert_eq!(big_file_threshold_bytes("C:\\a\\setup.msi"), 100 * MB);
+        assert_eq!(big_file_threshold_bytes("C:\\a\\movie.mp4"), 20 * MB);
+        assert_eq!(big_file_threshold_bytes("C:\\a\\movie.MP4"), 20 * MB);
+        assert_eq!(big_file_threshold_bytes("C:\\a\\clip.tmp"), 20 * MB);
+        assert_eq!(big_file_threshold_bytes("C:\\a\\song.mp3"), 5 * MB);
+        assert_eq!(big_file_threshold_bytes("C:\\a\\pack.zip"), 5 * MB);
+        assert_eq!(big_file_threshold_bytes("C:\\a\\app.apk"), 5 * MB);
+        assert_eq!(big_file_threshold_bytes("C:\\a\\photo.jpg"), 2 * MB);
+        assert_eq!(big_file_threshold_bytes("C:\\a\\doc.pdf"), 2 * MB);
+        assert_eq!(big_file_threshold_bytes("C:\\a\\app.log"), 2 * MB);
+        assert_eq!(big_file_threshold_bytes("C:\\a\\data.bin"), 50 * MB);
+        assert_eq!(big_file_threshold_bytes("C:\\a\\README"), 50 * MB);
     }
 }

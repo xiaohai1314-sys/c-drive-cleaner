@@ -667,7 +667,7 @@ function renderBig() {
   page.appendChild(head);
   page.appendChild(el("div", "sub", state.bigLoading
     ? `正在扫描各磁盘的大文件…${state.scanStatus?.big?.cancelled ? " 正在停止" : ""}`
-    : "扫描磁盘中大于 100 MB 的文件，删除前会先预览"));
+    : "按类型分档扫描（视频/临时文件 20MB、文档/图片/日志 2MB、压缩包/音频 5MB、安装包 100MB、其他 50MB），删除前会先预览"));
 
   const totals = { all: 0 };
   for (const row of rows) {
