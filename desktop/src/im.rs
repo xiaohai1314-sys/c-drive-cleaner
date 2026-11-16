@@ -80,10 +80,15 @@ fn env_path(key: &str) -> String {
     std::env::var(key).unwrap_or_default()
 }
 
-fn wechat_registry_path() -> Option<String> {
+fn wechat_registry_path_value() -> Option<String> {
     use std::os::windows::process::CommandExt;
     let output = std::process::Command::new(crate::system32("reg.exe"))
-        .args(["query", "HKCU\\Software\\Tencent\\WeChat", "/v", "FileSavePath"])
+        .args([
+            "query",
+            "HKCU\\Software\\Tencent\\WeChat",
+            "/v",
+            "FileSavePath",
+        ])
         .creation_flags(0x0800_0000)
         .output()
         .ok()?;
@@ -97,13 +102,37 @@ fn wechat_registry_path() -> Option<String> {
             if parts.len() >= 3 {
                 let path = parts[2..].join(" ");
                 if path != "MyDocument:" {
-                    let p = Path::new(&path);
-                    if p.is_dir() {
-                        return Some(path);
-                    }
-                    let sub = p.join("WeChat Files");
-                    if sub.is_dir() {
-                        return Some(sub.to_string_lossy().to_string());
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn wechat_registry_path() -> Option<String> {
+    let path = wechat_registry_path_value()?;
+    let p = Path::new(&path);
+    if p.is_dir() {
+        return Some(path);
+    }
+    let sub = p.join("WeChat Files");
+    if sub.is_dir() {
+        return Some(sub.to_string_lossy().to_string());
+    }
+    None
+}
+
+fn wechat_ini_path_value() -> Option<String> {
+    let roaming = env_path("APPDATA");
+    let ini = Path::new(&roaming).join("Tencent\\WeChat\\All Users\\config\\3ebffe94.ini");
+    if let Ok(content) = std::fs::read_to_string(&ini) {
+        for line in content.lines() {
+            if let Some((k, v)) = line.split_once('=') {
+                if k.trim().eq_ignore_ascii_case("FileSavePath") {
+                    let val = v.trim();
+                    if val != "MyDocument:" {
+                        return Some(val.to_string());
                     }
                 }
             }
@@ -113,54 +142,73 @@ fn wechat_registry_path() -> Option<String> {
 }
 
 fn wechat_ini_path() -> Option<String> {
-    let roaming = env_path("APPDATA");
-    let ini = Path::new(&roaming).join("Tencent\\WeChat\\All Users\\config\\3ebffe94.ini");
-    if let Ok(content) = std::fs::read_to_string(&ini) {
-        for line in content.lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                if k.trim().eq_ignore_ascii_case("FileSavePath") {
-                    let val = v.trim();
-                    if val != "MyDocument:" {
-                        let p = Path::new(val);
-                        if p.is_dir() {
-                            return Some(val.to_string());
-                        }
-                        let sub = p.join("WeChat Files");
-                        if sub.is_dir() {
-                            return Some(sub.to_string_lossy().to_string());
-                        }
-                    }
-                }
-            }
-        }
+    let path = wechat_ini_path_value()?;
+    let p = Path::new(&path);
+    if p.is_dir() {
+        return Some(path);
+    }
+    let sub = p.join("WeChat Files");
+    if sub.is_dir() {
+        return Some(sub.to_string_lossy().to_string());
     }
     None
 }
 
-pub fn roots(kind: &str) -> Vec<String> {
+fn default_root_candidates(kind: &str) -> Vec<String> {
     let roaming = env_path("APPDATA");
     let profile = env_path("USERPROFILE");
-    let mut candidates: Vec<String> = if kind == "wechat" {
-        let mut list = vec![
+    if kind == "wechat" {
+        vec![
             format!("{}\\Tencent\\WeChat", roaming),
             format!("{}\\Tencent\\xwechat", roaming),
             format!("{}\\Documents\\WeChat Files", profile),
             format!("{}\\Documents\\xwechat_files", profile),
-        ];
-        if let Some(custom) = wechat_registry_path() {
-            list.push(custom);
-        }
-        if let Some(custom) = wechat_ini_path() {
-            list.push(custom);
-        }
-        list
+        ]
     } else {
         vec![
             format!("{}\\Tencent\\QQ", roaming),
             format!("{}\\Tencent\\QQNT", roaming),
             format!("{}\\Documents\\Tencent Files", profile),
         ]
-    };
+    }
+}
+
+fn append_wechat_migration_candidates(candidates: &mut Vec<String>, value: &str) {
+    candidates.push(value.to_string());
+    candidates.push(
+        Path::new(value)
+            .join("WeChat Files")
+            .to_string_lossy()
+            .to_string(),
+    );
+}
+
+/// 返回迁移源白名单候选，不要求当前目录存在：恢复时源目录刚被改名，正是不存在的状态。
+pub(crate) fn migration_roots(kind: &str) -> Vec<String> {
+    let mut candidates = default_root_candidates(kind);
+    if kind == "wechat" {
+        for value in [wechat_registry_path_value(), wechat_ini_path_value()]
+            .into_iter()
+            .flatten()
+        {
+            append_wechat_migration_candidates(&mut candidates, &value);
+        }
+    }
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+pub fn roots(kind: &str) -> Vec<String> {
+    let mut candidates = default_root_candidates(kind);
+    if kind == "wechat" {
+        if let Some(custom) = wechat_registry_path() {
+            candidates.push(custom);
+        }
+        if let Some(custom) = wechat_ini_path() {
+            candidates.push(custom);
+        }
+    }
     candidates.sort();
     candidates.dedup();
     candidates
@@ -415,6 +463,30 @@ pub fn clean(kind: &str, kinds: &[String], paths: Option<Vec<String>>) -> crate:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migration_roots_include_default_candidates_without_checking_existence() {
+        let expected = format!("{}\\Documents\\Tencent Files", env_path("USERPROFILE"));
+        assert!(migration_roots("qq").contains(&expected));
+    }
+
+    #[test]
+    fn custom_wechat_migration_candidates_survive_missing_source_directory() {
+        let custom = format!(
+            "C:\\migration-root-that-does-not-exist-{}",
+            std::process::id()
+        );
+        let mut candidates = Vec::new();
+        append_wechat_migration_candidates(&mut candidates, &custom);
+        assert_eq!(candidates[0], custom);
+        assert_eq!(
+            candidates[1],
+            Path::new(&custom)
+                .join("WeChat Files")
+                .to_string_lossy()
+                .to_string()
+        );
+    }
 
     #[test]
     fn classifies_by_directory_before_extension() {
