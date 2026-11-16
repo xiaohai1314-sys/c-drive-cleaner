@@ -13,7 +13,7 @@ Rust + Tauri 2 实现：后端负责扫描、删除、粉碎和隐私清理，�
 | 大文件专清 | 解析 NTFS `$MFT` 快速枚举，大文件移到回收站 |
 | 重复文件专清 | 采样哈希 + 全文件哈希，每组保留一份，删除前重新核对 |
 | 微信/QQ 专清 | 按目录语义分类聊天媒体、缓存和日志 |
-| 文件粉碎 | 随机数据覆盖后删除，不可恢复 |
+| 文件粉碎 | 系统安全随机数覆盖后删除；固态盘上不保证物理层面不可恢复 |
 | 清理历史 | 查看每次清理的日志 |
 
 侧栏底部还有「清理历史」和「规则更新」。
@@ -42,8 +42,6 @@ cargo test             # 单元测试
 - `appdata_path_allowlist.json`：外置/远程规则允许的 AppData 目录模板
 - `rules_update.json`：规则更新地址（只接受 https），更新结果写到
   `%LOCALAPPDATA%\C盘清理工具\rules_remote.json`
-- `mftreader.rs` / `mftreader.exe`：NTFS `$MFT` 读取器，重新编译：
-  `rustc -O -C panic=abort mftreader.rs -o mftreader.exe`
 - 清理日志：`%LOCALAPPDATA%\C盘清理工具\logs`，保留最近 100 份
 
 ## 安全设计
@@ -52,6 +50,8 @@ cargo test             # 单元测试
 - 重解析点（符号链接/目录联接）不跟随，删除按句柄进行
 - 大文件和重复副本走回收站；重复文件删除前重新核对哈希、大小和修改时间
 - 隐私清理的注册表项删除前用 `reg.exe` 导出 `.reg` 备份，导出失败就跳过
-- 文件粉碎有二次确认，系统目录和受保护路径直接拒绝
+- 文件粉碎有二次确认，系统目录和受保护路径直接拒绝；固态盘有磨损均衡，覆盖只能尽力清除
+- 系统瘦身的更新缓存、转储目录逐文件按句柄删除，不跟随重解析点；清理更新缓存前先暂停 wuauserv/BITS，传递优化缓存交给系统 `Delete-DeliveryOptimizationCache`
+- 微信/QQ 搬家逐文件核对后才删除原目录；中断恢复记录只接受微信/QQ 数据目录及其同级备份
 
 更多实现细节见 [desktop/README.md](desktop/README.md)。

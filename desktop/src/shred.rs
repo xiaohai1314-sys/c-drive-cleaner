@@ -1,4 +1,6 @@
-//! 文件粉碎：随机数据覆盖写入后删除，不走回收站。
+//! 文件粉碎：用系统安全随机数覆盖写入后删除，不走回收站。
+//! 机械盘上覆盖后原内容基本无法恢复；固态盘有磨损均衡和预留空间，
+//! 覆盖不一定落到原物理块，只能视为「尽力清除」，彻底清除需整盘加密或安全擦除。
 //! 系统目录、受保护路径和重解析点一律拒绝；目录逐个文件粉碎后清空。
 
 use serde::Serialize;
@@ -130,7 +132,6 @@ fn shred_file(path: &str, passes: u32) -> Result<u64, String> {
         return Err(format!("不能粉碎符号链接或目录联接：{}", path));
     }
     let size = meta.len();
-    let mut rng = Rng::new();
     let mut buffer = vec![0u8; 1 << 20];
     for _ in 0..passes.max(1) {
         file.seek(SeekFrom::Start(0))
@@ -138,7 +139,7 @@ fn shred_file(path: &str, passes: u32) -> Result<u64, String> {
         let mut left = size;
         while left > 0 {
             let block = left.min(buffer.len() as u64) as usize;
-            rng.fill(&mut buffer[..block]);
+            fill_random(&mut buffer[..block])?;
             file.write_all(&buffer[..block])
                 .map_err(|error| format!("覆盖写入失败：{}（{}）", path, error))?;
             left -= block as u64;
@@ -152,32 +153,9 @@ fn shred_file(path: &str, passes: u32) -> Result<u64, String> {
     Ok(size)
 }
 
-struct Rng(u64);
-
-impl Rng {
-    fn new() -> Self {
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos() as u64)
-            .unwrap_or(0x9E37_79B9_7F4A_7C15);
-        Rng(seed | 1)
-    }
-
-    fn next(&mut self) -> u64 {
-        let mut value = self.0;
-        value ^= value << 13;
-        value ^= value >> 7;
-        value ^= value << 17;
-        self.0 = value;
-        value
-    }
-
-    fn fill(&mut self, buffer: &mut [u8]) {
-        for chunk in buffer.chunks_mut(8) {
-            let bytes = self.next().to_le_bytes();
-            chunk.copy_from_slice(&bytes[..chunk.len()]);
-        }
-    }
+/// 覆盖数据来自操作系统的密码学安全随机数（Windows 上为 ProcessPrng/BCryptGenRandom）。
+fn fill_random(buffer: &mut [u8]) -> Result<(), String> {
+    getrandom::fill(buffer).map_err(|error| format!("获取安全随机数失败：{}", error))
 }
 
 #[cfg(test)]

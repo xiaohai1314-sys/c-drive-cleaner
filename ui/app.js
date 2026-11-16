@@ -1377,7 +1377,7 @@ function renderShred() {
   head.appendChild(btn);
   page.appendChild(head);
   page.appendChild(el("div", "sub",
-    "先加入列表，确认后再覆盖写入并删除。系统目录不能粉碎，粉碎后无法恢复。"));
+    "先加入列表，确认后用随机数据覆盖再删除，不走回收站。机械盘上基本无法恢复；固态盘因磨损均衡无法保证，敏感数据请配合 BitLocker。"));
 
   const actions = el("div", "shred-actions");
   const addFiles = el("button", "btn btn-ghost", "添加文件");
@@ -1437,7 +1437,8 @@ async function runShred(button) {
     return;
   }
   const lines = [`将粉碎 ${state.shredPaths.length} 个路径。`,
-                 "粉碎会覆盖写入后删除，无法恢复，不走回收站。",
+                 "粉碎会覆盖写入后删除，不走回收站，删除后无法从本工具找回。",
+                 "固态盘（SSD）上无法保证旧数据在物理层面不可恢复。",
                  "系统目录和受保护路径会被拒绝。"];
   if (!(await showConfirm("确认粉碎", lines, "开始粉碎"))) return;
   button.disabled = true;

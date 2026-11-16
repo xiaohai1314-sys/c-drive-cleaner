@@ -28,6 +28,10 @@
     "active": true,
     "targets": ["nsis", "msi"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"],
-    "resources": ["../rules.json", "../rules_update.json"]
+    "resources": ["../rules.json", "../rules_update.json"],
+    "windows": {
+      "wix": { "language": ["zh-CN"] },
+      "nsis": { "languages": ["SimpChinese"] }
+    }
   }
 }
