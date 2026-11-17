@@ -34,6 +34,10 @@ pub fn shred_paths(paths: Vec<String>, passes: u32) -> ShredReport {
         errors: Vec::new(),
     };
     for path in paths {
+        if crate::task::is_cancelled("shred") {
+            report.errors.push("已取消".to_string());
+            break;
+        }
         if path.trim().is_empty() || !Path::new(&path).exists() {
             report.files_failed += 1;
             report.errors.push(format!("文件不存在：{}", path));
@@ -56,6 +60,7 @@ pub fn shred_paths(paths: Vec<String>, passes: u32) -> ShredReport {
         if Path::new(&path).is_dir() {
             shred_directory(&path, passes, &mut report);
         } else {
+            crate::task::add_done("shred", 1);
             match shred_file(&path, passes) {
                 Ok(size) => {
                     report.freed += size;
@@ -90,6 +95,11 @@ fn shred_directory(root: &str, passes: u32, report: &mut ShredReport) {
         }
     }
     for path in files {
+        if crate::task::is_cancelled("shred") {
+            report.errors.push("已取消".to_string());
+            break;
+        }
+        crate::task::add_done("shred", 1);
         if safety::is_protected_path(&path) {
             report.files_failed += 1;
             report

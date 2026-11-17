@@ -16,6 +16,7 @@ mod rules;
 mod safety;
 mod shred;
 mod system;
+mod task;
 mod timeutil;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -335,6 +336,22 @@ fn cancel_scan(kind: Option<String>) {
     }
 }
 
+#[tauri::command(async)]
+fn task_status() -> HashMap<String, task::TaskStatus> {
+    task::status()
+}
+
+#[tauri::command(async)]
+fn cancel_task(id: Option<String>) -> bool {
+    match id {
+        Some(id) => task::cancel(&id),
+        None => {
+            task::cancel_all();
+            true
+        }
+    }
+}
+
 const TOP_SKIP: [&str; 13] = [
     "$recycle.bin",
     "system volume information",
@@ -458,9 +475,27 @@ fn disk_info() -> Result<DiskInfo, String> {
 
 #[tauri::command(async)]
 fn scan_categories() -> Vec<CategorySize> {
+    let task = task::begin("scan_categories", "C盘瘦身扫描", false, false).ok();
     let rules = all_rules();
-    let mut out: Vec<CategorySize> = rules.par_iter().filter_map(scan_rule).collect();
+    if let Some(task) = &task {
+        task.set_unit("项");
+        task.set_total(rules.len() as u64);
+        task.stage("统计清理项");
+    }
+    let mut out: Vec<CategorySize> = rules
+        .par_iter()
+        .filter_map(|rule| {
+            let result = scan_rule(rule);
+            if let Some(task) = &task {
+                task.add_done(1);
+            }
+            result
+        })
+        .collect();
     out.sort_by(|a, b| b.size.cmp(&a.size));
+    if let Some(task) = &task {
+        task.finish("ok", &format!("统计 {} 项", out.len()));
+    }
     out
 }
 
@@ -2028,11 +2063,24 @@ struct CleanReport {
 #[tauri::command(async)]
 fn delete_recycle(paths: Vec<String>) -> DeleteReport {
     let title = "大文件";
+    let task = match task::begin("big_delete", "大文件清理", true, true) {
+        Ok(task) => task,
+        Err(message) => return delete_report(title, 0, 0, Vec::new(), vec![message]),
+    };
+    task.set_unit("个文件");
+    task.set_total(paths.len() as u64);
+    task.stage("校验文件");
+    let mut cancelled = false;
     let mut eligible = Vec::new();
     let mut sizes: HashMap<String, u64> = HashMap::new();
     let mut failed = Vec::new();
     let mut reasons = Vec::new();
     for path in paths {
+        if task.cancelled() {
+            cancelled = true;
+            break;
+        }
+        task.add_done(1);
         if !Path::new(&path).exists() {
             failed.push(path.clone());
             reasons.push(format!("{}：文件已不存在", path));
@@ -2047,6 +2095,12 @@ fn delete_recycle(paths: Vec<String>) -> DeleteReport {
         sizes.insert(path.clone(), size);
         eligible.push(path);
     }
+    if cancelled {
+        reasons.push("已取消".to_string());
+        task.finish("cancelled", "已取消");
+        return delete_report(title, 0, 0, failed, reasons);
+    }
+    task.stage("送入回收站");
     let _ = recycle::send_to_recycle(&eligible);
     let mut deleted = 0u64;
     let mut freed = 0u64;
@@ -2060,12 +2114,28 @@ fn delete_recycle(paths: Vec<String>) -> DeleteReport {
         }
     }
     invalidate_dup_cache();
+    task.finish(
+        "ok",
+        &format!(
+            "删除 {} 个，释放 {:.1} MB",
+            deleted,
+            freed as f64 / 1_048_576.0
+        ),
+    );
     delete_report(title, freed, deleted, failed, reasons)
 }
 
 #[tauri::command(async)]
 fn delete_dups(items: Vec<VerifyItem>) -> DeleteReport {
     let title = "重复文件";
+    let task = match task::begin("dup_delete", "重复文件清理", true, true) {
+        Ok(task) => task,
+        Err(message) => return delete_report(title, 0, 0, Vec::new(), vec![message]),
+    };
+    task.set_unit("个文件");
+    task.set_total(items.len() as u64);
+    task.stage("校验文件");
+    let mut cancelled = false;
     let mut eligible = Vec::new();
     let mut sizes: HashMap<String, u64> = HashMap::new();
     let mut failed = Vec::new();
@@ -2074,6 +2144,11 @@ fn delete_dups(items: Vec<VerifyItem>) -> DeleteReport {
     let mut keeper_set: HashSet<String> = HashSet::new();
 
     for item in items {
+        if task.cancelled() {
+            cancelled = true;
+            break;
+        }
+        task.add_done(1);
         let path = item.path.clone();
         if !Path::new(&path).exists() {
             failed.push(path.clone());
@@ -2112,23 +2187,39 @@ fn delete_dups(items: Vec<VerifyItem>) -> DeleteReport {
         pending_verify.push(item);
     }
 
+    if cancelled {
+        reasons.push("已取消".to_string());
+        task.finish("cancelled", "已取消");
+        return delete_report(title, 0, 0, failed, reasons);
+    }
+
     // 并行按盘计算保留项与待删副本的完整哈希（保留“宁可跳过不误删”的逐字节核对）。
     let mut paths_to_hash: Vec<String> = keeper_set.into_iter().collect();
     for item in &pending_verify {
         paths_to_hash.push(item.path.clone());
     }
+    task.stage("核对内容");
+    task.progress(0, paths_to_hash.len() as u64);
     let hashed_list = run_disk_aware(
         paths_to_hash,
         |p| p.as_str(),
         |_| 0,
         |p| {
             let h = full_hash(Path::new(&p));
+            task.add_done(1);
             (p, h)
         },
     );
     let hashed_map: HashMap<String, Option<String>> = hashed_list.into_iter().collect();
 
+    task.stage("复核内容");
+    task.progress(0, pending_verify.len() as u64);
     for item in pending_verify {
+        if task.cancelled() {
+            cancelled = true;
+            break;
+        }
+        task.add_done(1);
         let path = item.path;
         let expected = if item.keeper.is_empty() {
             Some(item.hash)
@@ -2151,6 +2242,12 @@ fn delete_dups(items: Vec<VerifyItem>) -> DeleteReport {
             }
         }
     }
+    if cancelled {
+        reasons.push("已取消".to_string());
+        task.finish("cancelled", "已取消");
+        return delete_report(title, 0, 0, failed, reasons);
+    }
+    task.stage("送入回收站");
     let _ = recycle::send_to_recycle(&eligible);
     let mut deleted = 0u64;
     let mut freed = 0u64;
@@ -2164,6 +2261,14 @@ fn delete_dups(items: Vec<VerifyItem>) -> DeleteReport {
         }
     }
     invalidate_dup_cache();
+    task.finish(
+        "ok",
+        &format!(
+            "删除 {} 个，释放 {:.1} MB",
+            deleted,
+            freed as f64 / 1_048_576.0
+        ),
+    );
     delete_report(title, freed, deleted, failed, reasons)
 }
 
@@ -2177,6 +2282,16 @@ fn clean_categories(keys: Vec<String>) -> CleanReport {
         errors: Vec::new(),
         notes: Vec::new(),
     };
+    let task = match task::begin("clean", "C盘瘦身清理", true, true) {
+        Ok(task) => task,
+        Err(message) => {
+            report.errors.push(message);
+            return report;
+        }
+    };
+    task.set_unit("个文件");
+    task.stage("准备清理项");
+    let mut cancelled = false;
     let rules = all_rules();
     let by_key: HashMap<&str, &Rule> = rules.iter().map(|rule| (rule.key.as_str(), rule)).collect();
     for key in keys {
@@ -2184,6 +2299,18 @@ fn clean_categories(keys: Vec<String>) -> CleanReport {
             report.errors.push(format!("找不到清理项：{}", key));
             continue;
         };
+        if task.cancelled() {
+            cancelled = true;
+            break;
+        }
+        task.stage(&format!(
+            "清理{}",
+            if rule.name.is_empty() {
+                key.clone()
+            } else {
+                rule.name.clone()
+            }
+        ));
         let kind = if rule.kind.is_empty() {
             "files"
         } else {
@@ -2225,6 +2352,10 @@ fn clean_categories(keys: Vec<String>) -> CleanReport {
         let min_age = Duration::from_secs(rule.min_age_minutes.saturating_mul(60));
 
         for root in &root_strings {
+            if task.cancelled() {
+                cancelled = true;
+                break;
+            }
             if safety::is_reparse_point(root) {
                 report.skipped += 1;
                 continue;
@@ -2237,6 +2368,7 @@ fn clean_categories(keys: Vec<String>) -> CleanReport {
                     &exclude,
                     min_age,
                     &mut report,
+                    &task,
                 );
                 continue;
             }
@@ -2245,6 +2377,10 @@ fn clean_categories(keys: Vec<String>) -> CleanReport {
                 .into_iter()
                 .filter_map(|e| e.ok())
             {
+                if task.cancelled() {
+                    cancelled = true;
+                    break;
+                }
                 if !entry.file_type().is_file() {
                     continue;
                 }
@@ -2265,7 +2401,11 @@ fn clean_categories(keys: Vec<String>) -> CleanReport {
                     &exclude,
                     min_age,
                     &mut report,
+                    &task,
                 );
+            }
+            if cancelled {
+                break;
             }
             if rule.prune_dirs && !safety::is_never_clean(root) {
                 let removed = safety::remove_empty_dirs(root);
@@ -2274,10 +2414,24 @@ fn clean_categories(keys: Vec<String>) -> CleanReport {
                 }
             }
         }
+        if cancelled {
+            break;
+        }
     }
     if report.errors.len() > 10 {
         report.errors.truncate(10);
     }
+    if cancelled {
+        report.errors.push("已取消".to_string());
+    }
+    task.finish(
+        if cancelled { "cancelled" } else { "ok" },
+        &format!(
+            "删除 {} 个文件，释放 {:.1} MB",
+            report.deleted,
+            report.freed as f64 / 1_048_576.0
+        ),
+    );
     let _ = logs::write_log(&[
         "开始清理".to_string(),
         "清理：C盘瘦身".to_string(),
@@ -2296,7 +2450,11 @@ fn clean_one(
     exclude: &[glob::Pattern],
     min_age: Duration,
     report: &mut CleanReport,
+    task: &task::TaskGuard,
 ) {
+    if task.cancelled() {
+        return;
+    }
     let name = safety::basename(path).to_lowercase();
     if !include_matches(&name, include, exclude) {
         return;
@@ -2308,6 +2466,7 @@ fn clean_one(
     if !age_ok(&meta, min_age, SystemTime::now()) {
         return;
     }
+    task.add_done(1);
     let size = meta.len();
     match safety::delete_file_checked(path, roots, true) {
         safety::DeleteOutcome::Deleted => {
@@ -2337,12 +2496,30 @@ fn list_drives() -> Vec<String> {
 
 #[tauri::command(async)]
 fn frag_analyze(drive: String) -> frag::FragReport {
-    frag::analyze(&drive)
+    let task = task::begin("frag_analyze", "磁盘碎片分析", false, false).ok();
+    if let Some(task) = &task {
+        task.stage("分析磁盘碎片");
+    }
+    let report = frag::analyze(&drive);
+    if let Some(task) = &task {
+        task.finish(
+            "ok",
+            &format!("碎片率 {:.1}%", report.percent.unwrap_or(0.0)),
+        );
+    }
+    report
 }
 
 #[tauri::command(async)]
 fn frag_optimize(drive: String) -> Result<(), String> {
-    frag::optimize(&drive)
+    let task = task::begin("frag", "磁盘碎片优化", false, true)?;
+    task.stage("执行磁盘优化（可能需要几分钟）");
+    let result = frag::optimize(&drive);
+    match &result {
+        Ok(()) => task.finish("ok", "磁盘优化完成"),
+        Err(message) => task.finish("failed", message),
+    }
+    result
 }
 
 // ---------- 命令：微信 / QQ ----------
@@ -2354,24 +2531,87 @@ fn im_roots(kind: String) -> Vec<String> {
 
 #[tauri::command(async)]
 fn im_scan(kind: String) -> Vec<im::ImRecord> {
-    im::list_media(&im::roots(&kind))
+    let task = task::begin("im_scan", "微信/QQ 文件扫描", false, false).ok();
+    if let Some(task) = &task {
+        task.stage("扫描聊天文件");
+    }
+    let records = im::list_media(&im::roots(&kind));
+    im::remember_scanned(&records);
+    if let Some(task) = &task {
+        task.finish("ok", &format!("发现 {} 个文件", records.len()));
+    }
+    records
+}
+
+#[tauri::command(async)]
+fn im_preview(path: String) -> Result<im::Preview, String> {
+    if !im::is_scanned(&path) {
+        return Err("文件不在扫描结果里".to_string());
+    }
+    im::preview(&path)
 }
 
 #[tauri::command(async)]
 fn im_clean(kind: String, kinds: Vec<String>, paths: Option<Vec<String>>) -> DeleteReport {
-    im::clean(&kind, &kinds, paths)
+    let task = match task::begin("im_clean", "微信/QQ 清理", true, true) {
+        Ok(task) => task,
+        Err(message) => return delete_report("微信/QQ", 0, 0, Vec::new(), vec![message]),
+    };
+    task.set_unit("个文件");
+    task.stage("清理聊天文件");
+    let report = im::clean(&kind, &kinds, paths);
+    task.progress(report.deleted + report.failed.len() as u64, report.deleted + report.failed.len() as u64);
+    task.finish(
+        if task.cancelled() { "cancelled" } else { "ok" },
+        &format!(
+            "删除 {} 个，释放 {:.1} MB",
+            report.deleted,
+            report.freed as f64 / 1_048_576.0
+        ),
+    );
+    report
 }
 
 // ---------- 命令：隐私清理 ----------
 
 #[tauri::command(async)]
 fn privacy_scan() -> Vec<privacy::PrivacyItem> {
-    privacy::scan()
+    let task = task::begin("privacy_scan", "隐私痕迹扫描", false, false).ok();
+    if let Some(task) = &task {
+        task.stage("扫描浏览器与系统痕迹");
+    }
+    let items = privacy::scan();
+    if let Some(task) = &task {
+        task.finish("ok", &format!("发现 {} 项", items.len()));
+    }
+    items
 }
 
 #[tauri::command(async)]
 fn privacy_clean(ids: Vec<String>) -> privacy::PrivacyReport {
-    privacy::clean(ids)
+    let task = match task::begin("privacy", "隐私痕迹清理", true, true) {
+        Ok(task) => task,
+        Err(message) => {
+            return privacy::PrivacyReport {
+                files: 0,
+                sql: 0,
+                registry: 0,
+                failed: vec![message],
+            }
+        }
+    };
+    task.set_unit("项");
+    task.set_total(ids.len() as u64);
+    task.stage("清理隐私痕迹");
+    let report = privacy::clean(ids);
+    task.finish(
+        if task.cancelled() { "cancelled" } else { "ok" },
+        &format!(
+            "文件 {} 个，数据库 {} 个，注册表 {} 条",
+            report.files, report.sql, report.registry
+        ),
+    );
+    report
 }
 
 // ---------- 命令：粉碎 / 清理历史 / 规则更新 ----------
@@ -2385,7 +2625,30 @@ pub(crate) fn now_seconds() -> u64 {
 
 #[tauri::command(async)]
 fn shred(paths: Vec<String>, passes: Option<u32>) -> shred::ShredReport {
+    let task = match task::begin("shred", "文件粉碎", true, true) {
+        Ok(task) => task,
+        Err(message) => {
+            return shred::ShredReport {
+                freed: 0,
+                files_ok: 0,
+                files_failed: 0,
+                finished: 0,
+                errors: vec![message],
+            }
+        }
+    };
+    task.set_unit("个文件");
+    task.stage("粉碎文件");
     let report = shred::shred_paths(paths, passes.unwrap_or(1));
+    task.finish(
+        if task.cancelled() { "cancelled" } else { "ok" },
+        &format!(
+            "成功 {} 个，失败 {} 个，释放 {:.1} MB",
+            report.files_ok,
+            report.files_failed,
+            report.freed as f64 / 1_048_576.0
+        ),
+    );
     logs::append_line(
         "shred_history.log",
         &format!(
@@ -2410,12 +2673,23 @@ fn history_read(name: String) -> Result<String, String> {
 
 #[tauri::command(async)]
 fn rules_update() -> Result<String, String> {
-    rules::update().map(|(added, total, note)| {
+    let task = task::begin("rules", "规则更新", false, false).ok();
+    if let Some(task) = &task {
+        task.stage("下载规则");
+    }
+    let result = rules::update().map(|(added, total, note)| {
         format!(
             "新增 {} 条，共 {} 条。{}\n下次扫描生效。",
             added, total, note
         )
-    })
+    });
+    if let Some(task) = &task {
+        match &result {
+            Ok(message) => task.finish("ok", message),
+            Err(message) => task.finish("failed", message),
+        }
+    }
+    result
 }
 
 #[tauri::command(async)]
@@ -2455,12 +2729,31 @@ fn kill_process(name: String) -> Result<usize, String> {
 
 #[tauri::command(async)]
 fn system_scan() -> Vec<system::SystemItem> {
-    system::scan_system_deep()
+    let task = task::begin("system_scan", "系统项扫描", false, false).ok();
+    if let Some(task) = &task {
+        task.stage("扫描系统缓存");
+    }
+    let items = system::scan_system_deep();
+    if let Some(task) = &task {
+        task.finish("ok", &format!("发现 {} 项", items.len()));
+    }
+    items
 }
 
 #[tauri::command(async)]
 fn system_clean(key: String) -> Result<String, String> {
-    system::clean_system_item(&key).map(|(_, _, msg)| msg)
+    let cancellable = matches!(key.as_str(), "sys_update_dl" | "sys_crash_dumps");
+    let task = task::begin("system", "系统深度瘦身", cancellable, true)?;
+    task.stage("准备清理");
+    let result = system::clean_system_item(&key);
+    match &result {
+        Ok((_, _, message)) => task.finish("ok", message),
+        Err(message) => task.finish(
+            if task.cancelled() { "cancelled" } else { "failed" },
+            message,
+        ),
+    }
+    result.map(|(_, _, message)| message)
 }
 
 #[tauri::command(async)]
@@ -2475,17 +2768,42 @@ fn hiber_set(mode: String) -> Result<String, String> {
 
 #[tauri::command(async)]
 fn recycle_empty() -> Result<(), String> {
-    system::empty_all_recycle_bins()
+    let task = task::begin("recycle", "清空回收站", false, true)?;
+    task.stage("清空所有回收站");
+    let result = system::empty_all_recycle_bins();
+    match &result {
+        Ok(()) => task.finish("ok", "回收站已清空"),
+        Err(message) => task.finish("failed", message),
+    }
+    result
 }
 
 #[tauri::command(async)]
 fn im_move_analyze(kind: String) -> system::MoveAnalysis {
-    system::analyze_im_migration(&kind)
+    let task = task::begin("im_move_analyze", "分析搬家数据", false, false).ok();
+    if let Some(task) = &task {
+        task.stage("统计数据目录");
+    }
+    let analysis = system::analyze_im_migration(&kind);
+    if let Some(task) = &task {
+        task.finish("ok", &format!("{} 个文件", analysis.file_count));
+    }
+    analysis
 }
 
 #[tauri::command(async)]
 fn im_move_execute(source: String, target_dir: String, kind: String) -> Result<String, String> {
-    system::execute_im_migration(&source, &target_dir, &kind)
+    let task = task::begin("im_move", "微信/QQ 数据搬家", true, true)?;
+    task.stage("检查运行状态");
+    let result = system::execute_im_migration(&source, &target_dir, &kind);
+    match &result {
+        Ok(message) => task.finish("ok", message),
+        Err(message) => task.finish(
+            if task.cancelled() { "cancelled" } else { "failed" },
+            message,
+        ),
+    }
+    result
 }
 
 // ---------- 启动 ----------
@@ -2598,6 +2916,48 @@ fn run_selftest() {
     println!("合计用时 {:.1}s", start.elapsed().as_secs_f64());
 }
 
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = (bytes[index + 1] as char).to_digit(16);
+            let low = (bytes[index + 2] as char).to_digit(16);
+            if let (Some(high), Some(low)) = (high, low) {
+                out.push((high * 16 + low) as u8);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// 聊天图片缩略图：前端用 convertFileSrc(path, "imthumb") 生成地址，这里返回解密后的图片字节。
+fn im_thumbnail_response(path: &str) -> tauri::http::Response<std::borrow::Cow<'static, [u8]>> {
+    use std::borrow::Cow;
+    let not_found = || {
+        tauri::http::Response::builder()
+            .status(404)
+            .body(Cow::Borrowed(&b""[..]))
+            .unwrap()
+    };
+    if !im::is_scanned(path) {
+        return not_found();
+    }
+    match im::thumbnail(path) {
+        Some((mime, bytes)) => tauri::http::Response::builder()
+            .header("Content-Type", mime)
+            .header("Cache-Control", "max-age=3600")
+            .body(Cow::Owned(bytes))
+            .unwrap(),
+        None => not_found(),
+    }
+}
+
 fn main() {
     // 磁盘扫描是 I/O 密集操作，线程开太多反而被磁盘和杀毒软件拖垮。
     let _ = rayon::ThreadPoolBuilder::new()
@@ -2612,10 +2972,17 @@ fn main() {
     system::recover_pending_move();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .register_uri_scheme_protocol("imthumb", |_app, request| {
+            im_thumbnail_response(&percent_decode(
+                request.uri().path().trim_start_matches('/'),
+            ))
+        })
         .invoke_handler(tauri::generate_handler![
             disk_info,
             scan_status,
             cancel_scan,
+            task_status,
+            cancel_task,
             scan_categories,
             scan_big,
             scan_dups,
@@ -2628,6 +2995,7 @@ fn main() {
             frag_optimize,
             im_roots,
             im_scan,
+            im_preview,
             im_clean,
             shred,
             history_list,

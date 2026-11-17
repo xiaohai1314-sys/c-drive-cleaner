@@ -913,10 +913,21 @@ pub fn clean(ids: Vec<String>) -> PrivacyReport {
     files.retain(|path| !path.trim().is_empty() && !safety::is_password_store(path));
     files.sort();
     files.dedup();
+    let total_units = files.len() as u64
+        + sql_jobs.len() as u64
+        + registry_jobs.len() as u64
+        + u64::from(userassist)
+        + u64::from(media);
+    crate::task::set_progress("privacy", 0, total_units);
+    if crate::task::is_cancelled("privacy") {
+        report.failed.push("已取消".to_string());
+        return report;
+    }
     if !files.is_empty() {
         let failed = recycle::send_to_recycle(&files);
         let failed_set: std::collections::HashSet<String> = failed.into_iter().collect();
         for path in &files {
+            crate::task::add_done("privacy", 1);
             if failed_set.contains(path) || Path::new(path).exists() {
                 report.failed.push(format!("文件未能移入回收站：{}", path));
             } else {
@@ -925,7 +936,12 @@ pub fn clean(ids: Vec<String>) -> PrivacyReport {
         }
     }
 
+    if crate::task::is_cancelled("privacy") {
+        report.failed.push("已取消".to_string());
+        return report;
+    }
     for (path, statements) in sql_jobs {
+        crate::task::add_done("privacy", 1);
         if apply_sql(Path::new(&path), &statements) {
             report.sql += 1;
         } else {
@@ -935,7 +951,12 @@ pub fn clean(ids: Vec<String>) -> PrivacyReport {
         }
     }
 
+    if crate::task::is_cancelled("privacy") {
+        report.failed.push("已取消".to_string());
+        return report;
+    }
     for job in registry_jobs {
+        crate::task::add_done("privacy", 1);
         if job == "reg_file" {
             let mut deleted = 0;
             for path in recent_docs_paths() {
@@ -951,6 +972,7 @@ pub fn clean(ids: Vec<String>) -> PrivacyReport {
     }
 
     if userassist {
+        crate::task::add_done("privacy", 1);
         let mut deleted = 0;
         for path in userassist_count_keys() {
             deleted += clear_values("HKCU", &path, "userassist");
@@ -964,6 +986,7 @@ pub fn clean(ids: Vec<String>) -> PrivacyReport {
     }
 
     if media {
+        crate::task::add_done("privacy", 1);
         report.registry += clear_values("HKCU", WMP_RECENT, "wmp");
     }
 

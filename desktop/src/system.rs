@@ -99,6 +99,12 @@ pub struct DriveTarget {
 
 // ---------- 1. 资源管理器联动 ----------
 
+/// explorer.exe 在 Windows 目录下，不在 System32 里，不能复用 system32()。
+fn explorer_exe() -> String {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    format!("{}\\explorer.exe", root.trim_end_matches('\\'))
+}
+
 /// 在 Windows 资源管理器中高亮选中指定文件或目录。
 pub fn reveal_in_explorer(path: &str) -> Result<(), String> {
     let target = Path::new(path);
@@ -106,7 +112,7 @@ pub fn reveal_in_explorer(path: &str) -> Result<(), String> {
         return Err(format!("文件不存在：{}", path));
     }
     let arg = format!("/select,\"{}\"", path.replace('/', "\\"));
-    Command::new(crate::system32("explorer.exe"))
+    Command::new(explorer_exe())
         .raw_arg(arg)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
@@ -120,7 +126,7 @@ pub fn open_path(path: &str) -> Result<(), String> {
     if !target.exists() {
         return Err(format!("路径不存在：{}", path));
     }
-    Command::new(crate::system32("explorer.exe"))
+    Command::new(explorer_exe())
         .arg(path.replace('/', "\\"))
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
@@ -267,9 +273,12 @@ pub fn clean_system_item(key: &str) -> Result<(u64, u64, String), String> {
     match key {
         "sys_update_dl" => {
             // 更新服务运行时删 Download 可能打断正在进行的更新：先停 wuauserv/BITS，清完再按原状态启动。
+            crate::task::set_stage("system", "停止更新服务");
             let stopped = stop_services(&["wuauserv", "bits"])?;
+            crate::task::set_stage("system", "清理更新安装包");
             let dir = update_download_dir();
             let (freed, count) = clean_dir_contents(&dir);
+            crate::task::set_stage("system", "恢复更新服务");
             start_services(&stopped);
             Ok((
                 freed,
@@ -283,6 +292,7 @@ pub fn clean_system_item(key: &str) -> Result<(u64, u64, String), String> {
         }
         "sys_delivery_opt" => {
             // 交给系统自带的 cmdlet 清理，它会通过 DoSvc 删除缓存并保留服务自身的状态文件。
+            crate::task::set_stage("system", "调用系统清理传递优化缓存");
             let dir = delivery_opt_dir();
             let (before, before_count) = dir_size_count(&dir);
             let output = Command::new(crate::system32("WindowsPowerShell\\v1.0\\powershell.exe"))
@@ -315,6 +325,7 @@ pub fn clean_system_item(key: &str) -> Result<(u64, u64, String), String> {
             ))
         }
         "sys_crash_dumps" => {
+            crate::task::set_stage("system", "清理崩溃转储与错误报告");
             let mut total_freed = 0u64;
             let mut total_count = 0u64;
             for p in crash_dump_dirs() {
@@ -334,6 +345,7 @@ pub fn clean_system_item(key: &str) -> Result<(u64, u64, String), String> {
         }
         "sys_dism_winsxs" => {
             // 执行 DISM 组件清理
+            crate::task::set_stage("system", "DISM 组件库精简（约 1~3 分钟）");
             let output = Command::new(crate::system32("Dism.exe"))
                 .args(["/Online", "/Cleanup-Image", "/StartComponentCleanup"])
                 .creation_flags(CREATE_NO_WINDOW)
@@ -399,6 +411,9 @@ fn clean_dir_contents(dir: &Path) -> (u64, u64) {
         .follow_links(false)
         .into_iter();
     while let Some(entry) = walker.next() {
+        if crate::task::is_cancelled("system") {
+            break;
+        }
         let Ok(entry) = entry else {
             continue;
         };
@@ -419,6 +434,7 @@ fn clean_dir_contents(dir: &Path) -> (u64, u64) {
         ) {
             freed += len;
             count += 1;
+            crate::task::add_done("system", 1);
         }
     }
     safety::remove_empty_dirs(&root);
@@ -478,6 +494,10 @@ pub fn analyze_im_migration(kind: &str) -> MoveAnalysis {
 
     for root in &roots {
         let norm = safety::normalize(root);
+        // AppData 下是客户端程序数据，搬它没有意义，也不是「聊天文件」。
+        if crate::im::is_program_root(&norm) {
+            continue;
+        }
         if norm.to_uppercase().starts_with("C:") {
             let (sz, cnt) = dir_size_count(Path::new(&norm));
             if sz > max_size {
@@ -779,6 +799,7 @@ pub fn execute_im_migration(
     }
 
     // 计算源大小与目标磁盘剩余空间
+    crate::task::set_stage("im_move", "统计源数据");
     let (src_size, file_cnt) = dir_size_count(source);
     if src_size == 0 || file_cnt == 0 {
         return Err("源数据目录是空的，无需搬家".to_string());
@@ -798,8 +819,14 @@ pub fn execute_im_migration(
     }
 
     // 句柄相对创建目标并复制；保留源/目标目录链，阻止路径在校验期间被替换。
+    crate::task::set_stage("im_move", "复制文件");
+    crate::task::set_unit("im_move", "字节");
+    crate::task::set_progress("im_move", 0, src_size);
     let (source_handles, target_handles) = copy_dir_recursive(source, target)
         .map_err(|error| format!("拷贝文件至新目录失败：{}", error))?;
+    crate::task::set_stage("im_move", "校验文件");
+    crate::task::set_unit("im_move", "个文件");
+    crate::task::set_progress("im_move", 0, file_cnt);
     let (dst_size, dst_cnt) = dir_size_count(target);
     if dst_size != src_size || dst_cnt != file_cnt {
         drop(source_handles);
@@ -820,6 +847,7 @@ pub fn execute_im_migration(
     drop(source_handles);
 
     // 3. 将原目录重命名为临时备份
+    crate::task::set_stage("im_move", "备份原目录");
     let backup_path = source.with_file_name(format!(
         "{}_backup_{}",
         source.file_name().unwrap_or_default().to_string_lossy(),
@@ -847,6 +875,7 @@ pub fn execute_im_migration(
     }
 
     // 4. 在原位置创建 NTFS Junction (mklink /J)
+    crate::task::set_stage("im_move", "创建目录联接");
     let output = Command::new(crate::system32("cmd.exe"))
         .arg("/D")
         .arg("/C")
@@ -861,6 +890,7 @@ pub fn execute_im_migration(
     match output {
         Ok(out) if out.status.success() => {
             // Junction 创建成功！删除原目录备份，释放 C 盘空间
+            crate::task::set_stage("im_move", "清理备份");
             let backup_root = [backup_path.to_string_lossy().to_string()];
             let removed = safety::remove_tree_checked(&backup_path, &backup_root).is_ok();
             if removed {
@@ -917,6 +947,9 @@ fn verify_copy(src: &Path, dst: &Path) -> Result<(), String> {
         .follow_links(false)
         .into_iter();
     while let Some(entry) = walker.next() {
+        if crate::task::is_cancelled("im_move") {
+            return Err("已取消".to_string());
+        }
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         let reparse =
@@ -954,6 +987,7 @@ fn verify_copy(src: &Path, dst: &Path) -> Result<(), String> {
                 break;
             }
         }
+        crate::task::add_done("im_move", 1);
     }
     Ok(())
 }
@@ -966,6 +1000,9 @@ fn copy_dir_contents(
 ) -> io::Result<()> {
     let _source_chain = safety::pin_directory_checked(src, source_root)?;
     for entry in std::fs::read_dir(src)? {
+        if crate::task::is_cancelled("im_move") {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "已取消"));
+        }
         let entry = entry?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
@@ -981,7 +1018,8 @@ fn copy_dir_contents(
                 safety::open_read_file_checked(&from, source_root)?;
             let (_target_parents, mut target_file) =
                 safety::create_new_file_checked(&to, target_root)?;
-            io::copy(&mut source_file, &mut target_file)?;
+            let copied = io::copy(&mut source_file, &mut target_file)?;
+            crate::task::add_done("im_move", copied);
             target_file.sync_all()?;
         }
     }

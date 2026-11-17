@@ -2,7 +2,9 @@
 //! 对应 Python 版 imclean.py。
 
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use crate::recycle;
 use crate::timeutil;
@@ -78,6 +80,37 @@ pub struct ImRecord {
 
 fn env_path(key: &str) -> String {
     std::env::var(key).unwrap_or_default()
+}
+
+/// 系统「文档」目录的真实位置。不能直接拼 `%USERPROFILE%\Documents`：
+/// 用户把文档重定向到别的盘（例如 D:\Documents）后，聊天数据就在那边。
+fn documents_dir() -> String {
+    use std::os::windows::ffi::OsStringExt;
+    let mut buffer = [0u16; 260];
+    let hr = unsafe {
+        windows_sys::Win32::UI::Shell::SHGetFolderPathW(
+            std::ptr::null_mut(),
+            windows_sys::Win32::UI::Shell::CSIDL_PERSONAL as i32,
+            std::ptr::null_mut(),
+            0,
+            buffer.as_mut_ptr(),
+        )
+    };
+    if hr >= 0 {
+        let len = buffer
+            .iter()
+            .position(|value| *value == 0)
+            .unwrap_or(buffer.len());
+        if len > 0 {
+            let path = std::ffi::OsString::from_wide(&buffer[..len])
+                .to_string_lossy()
+                .to_string();
+            if Path::new(&path).is_dir() {
+                return path;
+            }
+        }
+    }
+    format!("{}\\Documents", env_path("USERPROFILE"))
 }
 
 fn wechat_registry_path_value() -> Option<String> {
@@ -156,19 +189,19 @@ fn wechat_ini_path() -> Option<String> {
 
 fn default_root_candidates(kind: &str) -> Vec<String> {
     let roaming = env_path("APPDATA");
-    let profile = env_path("USERPROFILE");
+    let documents = documents_dir();
     if kind == "wechat" {
         vec![
             format!("{}\\Tencent\\WeChat", roaming),
             format!("{}\\Tencent\\xwechat", roaming),
-            format!("{}\\Documents\\WeChat Files", profile),
-            format!("{}\\Documents\\xwechat_files", profile),
+            format!("{}\\WeChat Files", documents),
+            format!("{}\\xwechat_files", documents),
         ]
     } else {
         vec![
             format!("{}\\Tencent\\QQ", roaming),
             format!("{}\\Tencent\\QQNT", roaming),
-            format!("{}\\Documents\\Tencent Files", profile),
+            format!("{}\\Tencent Files", documents),
         ]
     }
 }
@@ -245,13 +278,35 @@ fn ext_of(path: &str) -> String {
     }
 }
 
-fn dir_kind(dirs: &[String]) -> Option<&'static str> {
+fn dir_kind(dirs: &[String], ext: &str) -> Option<&'static str> {
     for (kind, names) in MEDIA_DIRS {
-        if dirs.iter().any(|dir| names.contains(&dir.as_str())) {
-            return Some(kind);
+        if !dirs.iter().any(|dir| names.contains(&dir.as_str())) {
+            continue;
         }
+        // 微信把视频封面图（.jpg）和视频放在同一个 Video 目录里，
+        // 不能因为目录叫 Video 就把封面图也算成视频。
+        if kind == "video" && !VIDEO_EXT.contains(&ext) {
+            continue;
+        }
+        return Some(kind);
     }
     None
+}
+
+/// 位于 AppData 下的根目录是客户端程序数据，里面只有缓存和日志。
+pub(crate) fn is_program_root(root: &str) -> bool {
+    let root = root.trim_end_matches(['\\', '/']).to_lowercase();
+    if root.is_empty() {
+        return false;
+    }
+    ["APPDATA", "LOCALAPPDATA"].iter().any(|key| {
+        std::env::var(key)
+            .ok()
+            .map(|base| base.trim_end_matches(['\\', '/']).to_lowercase())
+            .is_some_and(|base| {
+                !base.is_empty() && (root == base || root.starts_with(&format!("{base}\\")))
+            })
+    })
 }
 
 fn received_subkind(path: &str) -> &'static str {
@@ -291,7 +346,15 @@ pub fn classify(path: &str, root: Option<&str>) -> Option<(String, String)> {
     {
         return None;
     }
-    let kind = if let Some(dir_kind) = dir_kind(dirs) {
+    if is_program_root(root.unwrap_or_default()) {
+        let kind = if matches!(ext.as_str(), ".log" | ".xlog" | ".dmp") {
+            "log"
+        } else {
+            "cache"
+        };
+        return Some((kind.to_string(), String::new()));
+    }
+    let kind = if let Some(dir_kind) = dir_kind(dirs, &ext) {
         dir_kind.to_string()
     } else if ext.is_empty() || ext == ".dat" || ext == ".tmp" {
         return None;
@@ -367,6 +430,150 @@ pub fn list_media(roots: &[String]) -> Vec<ImRecord> {
     found
 }
 
+/// 缩略图协议只服务扫描结果里的文件，协议本身不能被用来读任意路径。
+static SCANNED_FILES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+pub fn remember_scanned(records: &[ImRecord]) {
+    let set = SCANNED_FILES.get_or_init(|| Mutex::new(HashSet::new()));
+    if let Ok(mut set) = set.lock() {
+        for record in records {
+            set.insert(record.path.clone());
+        }
+    }
+}
+
+pub fn is_scanned(path: &str) -> bool {
+    SCANNED_FILES
+        .get()
+        .and_then(|set| set.lock().ok().map(|set| set.contains(path)))
+        .unwrap_or(false)
+}
+
+fn image_mime(head: &[u8]) -> Option<&'static str> {
+    if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some("image/png");
+    }
+    if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if head.len() >= 12 && head.starts_with(b"RIFF") && &head[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if head.starts_with(b"BM") {
+        return Some("image/bmp");
+    }
+    None
+}
+
+/// 微信把聊天图片异或 0x05 后存成 .dat，这里还原成浏览器能直接显示的字节。
+pub fn thumbnail(path: &str) -> Option<(&'static str, Vec<u8>)> {
+    if let Some(found) = read_image(path) {
+        return Some(found);
+    }
+    // 朋友圈的视频没有封面扩展名，同名的 `_t` 文件就是它的封面图。
+    read_image(&format!("{path}_t"))
+}
+
+fn read_image(path: &str) -> Option<(&'static str, Vec<u8>)> {
+    use std::io::{Read, Seek, SeekFrom};
+    const MAX: u64 = 64 * 1024 * 1024;
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX {
+        return None;
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 16];
+    if file.read(&mut head).ok()? < 16 {
+        return None;
+    }
+    // 先看头部判断是不是图片，避免为视频等大文件白读一遍。
+    let encrypted = if image_mime(&head).is_some() {
+        false
+    } else {
+        let mut probe = head;
+        for byte in probe.iter_mut() {
+            *byte ^= 0x05;
+        }
+        if image_mime(&probe).is_none() {
+            return None;
+        }
+        true
+    };
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut data = Vec::with_capacity(meta.len() as usize);
+    file.read_to_end(&mut data).ok()?;
+    if encrypted {
+        for byte in data.iter_mut() {
+            *byte ^= 0x05;
+        }
+    }
+    let mime = image_mime(&data)?;
+    Some((mime, data))
+}
+
+#[derive(Serialize)]
+pub struct Preview {
+    pub text: String,
+    pub binary: bool,
+    pub truncated: bool,
+    pub size: u64,
+}
+
+fn looks_binary(data: &[u8]) -> bool {
+    if data.is_empty() {
+        return false;
+    }
+    let sample = &data[..data.len().min(4096)];
+    let odd = sample
+        .iter()
+        .filter(|byte| **byte < 0x09 || (**byte > 0x0D && **byte < 0x20))
+        .count();
+    odd * 100 / sample.len() > 10
+}
+
+fn hex_preview(data: &[u8]) -> String {
+    let mut lines = Vec::new();
+    for chunk in data.chunks(16).take(32) {
+        let hex: Vec<String> = chunk.iter().map(|byte| format!("{byte:02x}")).collect();
+        let ascii: String = chunk
+            .iter()
+            .map(|byte| if (32..127).contains(byte) { *byte as char } else { '.' })
+            .collect();
+        lines.push(format!("{:<47}  {ascii}", hex.join(" ")));
+    }
+    lines.join("\n")
+}
+
+/// 日志预览：文本直接显示，微信的 .xlog 是加密压缩格式，只能给出开头的十六进制内容。
+pub fn preview(path: &str) -> Result<Preview, String> {
+    use std::io::Read;
+    const LIMIT: u64 = 64 * 1024;
+    let meta = std::fs::metadata(path).map_err(|error| format!("读取失败：{error}"))?;
+    if !meta.is_file() {
+        return Err("不是文件".to_string());
+    }
+    let file = std::fs::File::open(path).map_err(|error| format!("打开失败：{error}"))?;
+    let mut buffer = Vec::new();
+    file.take(LIMIT)
+        .read_to_end(&mut buffer)
+        .map_err(|error| format!("读取失败：{error}"))?;
+    let binary = looks_binary(&buffer);
+    let text = if binary {
+        hex_preview(&buffer)
+    } else {
+        String::from_utf8_lossy(&buffer).to_string()
+    };
+    Ok(Preview {
+        text,
+        binary,
+        truncated: meta.len() > LIMIT,
+        size: meta.len(),
+    })
+}
+
 pub fn clean(kind: &str, kinds: &[String], paths: Option<Vec<String>>) -> crate::DeleteReport {
     let roots = roots(kind);
     let mut chosen: Vec<ImRecord> = Vec::new();
@@ -431,8 +638,18 @@ pub fn clean(kind: &str, kinds: &[String], paths: Option<Vec<String>>) -> crate:
             reasons: Vec::new(),
         };
     }
+    crate::task::set_progress("im_clean", 0, chosen.len() as u64);
+    if crate::task::is_cancelled("im_clean") {
+        return crate::DeleteReport {
+            freed: 0,
+            deleted: 0,
+            failed: Vec::new(),
+            reasons: vec!["已取消".to_string()],
+        };
+    }
     let batch: Vec<String> = chosen.iter().map(|record| record.path.clone()).collect();
     let _ = recycle::send_to_recycle(&batch);
+    crate::task::set_progress("im_clean", chosen.len() as u64, chosen.len() as u64);
     let mut freed = 0u64;
     let mut deleted = 0u64;
     let mut failed = Vec::new();
@@ -466,8 +683,14 @@ mod tests {
 
     #[test]
     fn migration_roots_include_default_candidates_without_checking_existence() {
-        let expected = format!("{}\\Documents\\Tencent Files", env_path("USERPROFILE"));
+        let expected = format!("{}\\Tencent Files", documents_dir());
         assert!(migration_roots("qq").contains(&expected));
+    }
+
+    #[test]
+    fn documents_dir_points_at_the_real_documents_folder() {
+        let documents = documents_dir();
+        assert!(Path::new(&documents).is_dir(), "文档目录不存在：{documents}");
     }
 
     #[test]
@@ -508,6 +731,23 @@ mod tests {
     }
 
     #[test]
+    fn video_cover_images_are_not_counted_as_video() {
+        let root = "C:\\Users\\u\\Documents\\WeChat Files";
+        let (kind, _sub) = classify(
+            "C:\\Users\\u\\Documents\\WeChat Files\\wxid\\FileStorage\\Video\\2025-09\\0483e1f2.jpg",
+            Some(root),
+        )
+        .unwrap();
+        assert_eq!(kind, "image");
+        let (kind, _sub) = classify(
+            "C:\\Users\\u\\Documents\\WeChat Files\\wxid\\FileStorage\\Video\\2025-09\\0483e1f2.mp4",
+            Some(root),
+        )
+        .unwrap();
+        assert_eq!(kind, "video");
+    }
+
+    #[test]
     fn skips_databases_and_config() {
         let root = "C:\\Users\\u\\Documents\\WeChat Files";
         assert!(classify(
@@ -520,6 +760,30 @@ mod tests {
             Some(root)
         )
         .is_none());
+    }
+
+    #[test]
+    fn classifies_miniprogram_assets_as_cache() {
+        let root = format!("{}\\Tencent\\xwechat", env_path("APPDATA"));
+        let (kind, _sub) = classify(
+            &format!(
+                "{root}\\radium\\users\\h\\xworker\\liteapp\\local\\packages\\p\\main\\174\\dist\\pkg\\res\\img\\lucky-bag-card-0.png"
+            ),
+            Some(&root),
+        )
+        .unwrap();
+        assert_eq!(kind, "cache");
+    }
+
+    #[test]
+    fn classifies_client_icons_as_cache_not_chat_images() {
+        let root = format!("{}\\Tencent\\xwechat", env_path("APPDATA"));
+        let (kind, _sub) = classify(
+            &format!("{root}\\xplugin\\Plugins\\WinWeixinShare\\2004\\extracted\\Assets\\WeChat150.png"),
+            Some(&root),
+        )
+        .unwrap();
+        assert_eq!(kind, "cache");
     }
 
     #[test]
