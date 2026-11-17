@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.xiaohai1314.cdrivecleaner",
   "build": {
-    "frontendDist": "../ui"
+    "beforeBuildCommand": "npm --prefix ../web run build",
+    "frontendDist": "../web/dist"
   },
   "app": {
     "withGlobalTauri": true,

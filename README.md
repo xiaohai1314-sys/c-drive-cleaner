@@ -1,7 +1,7 @@
 # C 盘清理工具
 
 Windows 下的图形化 C 盘清理工具，先扫描、再勾选、后清理。
-Rust + Tauri 2 实现：后端负责扫描、删除、粉碎和隐私清理，界面是纯静态 HTML/CSS/JS。
+Rust + Tauri 2 实现：后端负责扫描、删除、粉碎和隐私清理，界面是 Vue 3 + Vite + TypeScript（`web/`）。
 
 ## 功能
 
@@ -20,15 +20,30 @@ Rust + Tauri 2 实现：后端负责扫描、删除、粉碎和隐私清理，�
 
 ## 构建与运行
 
-需要 Rust 1.77+ 和 WebView2 运行时（Win10 1803+ 一般自带）。
+需要 Rust 1.77+、Node 20+ 和 WebView2 运行时（Win10 1803+ 一般自带）。
+
+前端在 `web/`（Vue 3 + Vite + TypeScript），构建产物 `web/dist` 在编译期嵌入 exe，
+所以改了界面必须先构建前端，直接 `cargo build` 会把旧的 `web/dist` 打进去：
 
 ```bash
-cd desktop
-cargo build            # 调试版
-cargo run              # 启动窗口
-cargo build --release  # 发布版
-cargo test             # 单元测试
-./target/debug/c-drive-cleaner.exe --selftest   # 不开窗口跑一遍后端扫描
+npm --prefix web install   # 首次
+pwsh scripts/build.ps1     # 先 npm run build，再 cargo build --release
+```
+
+分开跑也一样：
+
+```bash
+npm --prefix web run build
+cargo build --release --manifest-path desktop/Cargo.toml
+```
+
+调试版、测试和自检：
+
+```bash
+cargo build --manifest-path desktop/Cargo.toml            # 调试版
+cargo run --manifest-path desktop/Cargo.toml              # 启动窗口
+cargo test --manifest-path desktop/Cargo.toml             # 单元测试
+./desktop/target/debug/c-drive-cleaner.exe --selftest     # 不开窗口跑一遍后端扫描
 ```
 
 程序启动时会检查管理员权限（读 `$MFT` 需要），不是管理员会用 UAC 重新拉起自己。

@@ -11,8 +11,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Install frontend deps
+        working-directory: web
+        shell: pwsh
+        run: npm ci
+
+      # 前端产物在编译期嵌入，Rust 构建之前必须先存在 web/dist。
+      - name: Build frontend
+        working-directory: web
+        shell: pwsh
+        run: npm run build
 
       - name: Rust tests
         working-directory: desktop

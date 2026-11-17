@@ -1,7 +1,7 @@
 # C 盘清理工具（Rust + Tauri）
 
 Windows 下的图形化 C 盘清理工具。Rust 负责扫描、删除、粉碎和隐私清理，
-界面是纯静态 HTML/CSS/JS，不引入 Node 构建链。
+界面是 Vue 3 + Vite + TypeScript，源码在仓库根的 `web/`，构建产物在编译期嵌入 exe。
 
 ## 目录
 
@@ -12,10 +12,9 @@ desktop/
   tauri.conf.json      窗口、打包、资源（rules.json / rules_update.json）
   capabilities/        窗口权限
   src/main.rs          后端命令：磁盘信息、清理项统计、大文件、重复文件
-ui/                    前端（纯 HTML/CSS/JS，无 Node 构建链）
-  index.html
-  style.css
-  app.js
+web/                   前端（Vue 3 + Vite + TypeScript，构建产物 dist 嵌入 exe）
+  src/pages/           9 个页面
+  src/stores/          各页面状态与 Tauri 调用
 ```
 
 ## 已迁移
