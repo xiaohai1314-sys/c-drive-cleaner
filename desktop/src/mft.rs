@@ -585,11 +585,17 @@ fn query_usn_journal(handle: *mut c_void) -> Option<UsnJournalData> {
     }
 }
 
+enum UsnDelta {
+    Changed(HashSet<u64>),
+    TooMany,
+    Failed,
+}
+
 fn collect_usn_changed_indices(
     handle: *mut c_void,
     journal: &UsnJournalData,
     start_usn: i64,
-) -> Option<HashSet<u64>> {
+) -> UsnDelta {
     let mut input = ReadUsnJournalDataV0 {
         start_usn,
         reason_mask: 0xFFFF_FFFF,
@@ -616,10 +622,12 @@ fn collect_usn_changed_indices(
             )
         };
         if ok == 0 || returned < 8 {
-            return None;
+            return UsnDelta::Failed;
         }
         let len = returned as usize;
-        let next_cursor = u64_at(&buf, 0)? as i64;
+        let Some(next_cursor) = u64_at(&buf, 0).map(|v| v as i64) else {
+            return UsnDelta::Failed;
+        };
         if len == 8 {
             break;
         }
@@ -636,7 +644,7 @@ fn collect_usn_changed_indices(
                 if let Some(frn) = u64_at(&buf, off + 8) {
                     changed.insert(frn & 0xFFFF_FFFF_FFFF);
                     if changed.len() > MAX_USN_DELTA_FRNS {
-                        return None;
+                        return UsnDelta::TooMany;
                     }
                 }
             }
@@ -648,7 +656,7 @@ fn collect_usn_changed_indices(
         input.start_usn = next_cursor;
     }
 
-    Some(changed)
+    UsnDelta::Changed(changed)
 }
 
 fn read_single_mft_record(
@@ -682,6 +690,201 @@ fn read_single_mft_record(
         return None;
     }
     Some((actual_frn, rec_len))
+}
+
+fn open_volume_handle(volume_path: &str) -> Option<VolumeHandle> {
+    let wpath = wide(volume_path);
+    let raw = unsafe {
+        CreateFileW(
+            wpath.as_ptr(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw.is_null() || raw == INVALID_HANDLE_PTR {
+        None
+    } else {
+        Some(VolumeHandle(raw))
+    }
+}
+
+const DELTA_PARALLEL_THRESHOLD: usize = 64;
+const DELTA_PARALLEL_THREADS: usize = 8;
+
+/// USN 变更记录重读：少量变更走原句柄串行，大量变更按 8 线程并行（每线程独立卷句柄）。
+fn apply_usn_delta(
+    handle: *mut c_void,
+    volume_path: &str,
+    changed: HashSet<u64>,
+    record_size: usize,
+    bytes_per_sector: usize,
+    bytes_per_cluster: usize,
+    min_size: u64,
+) -> Vec<(u64, ParsedRecord)> {
+    let changed: Vec<u64> = changed.into_iter().collect();
+    if changed.len() < DELTA_PARALLEL_THRESHOLD {
+        let mut out_buf = vec![0u8; 16 + record_size];
+        let mut out = Vec::with_capacity(changed.len());
+        for idx in changed {
+            if let Some((actual_frn, _)) =
+                read_single_mft_record(handle, idx, record_size, &mut out_buf)
+            {
+                if (actual_frn & 0xFFFF_FFFF_FFFF) == idx {
+                    let rec = &mut out_buf[12..12 + record_size];
+                    out.push((
+                        idx,
+                        parse_record_in_place(
+                            rec,
+                            idx,
+                            bytes_per_sector,
+                            bytes_per_cluster,
+                            min_size,
+                        ),
+                    ));
+                }
+            }
+        }
+        return out;
+    }
+
+    let threads = DELTA_PARALLEL_THREADS.min(changed.len());
+    let chunk = changed.len().div_ceil(threads);
+    let mut results: Vec<(u64, ParsedRecord)> = Vec::with_capacity(changed.len());
+    let mut all_ok = true;
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(threads);
+        for part in changed.chunks(chunk) {
+            let path = volume_path.to_string();
+            handles.push(scope.spawn(move || -> Option<Vec<(u64, ParsedRecord)>> {
+                let vol = open_volume_handle(&path)?;
+                let mut out_buf = vec![0u8; 16 + record_size];
+                let mut out = Vec::with_capacity(part.len());
+                for &idx in part {
+                    if let Some((actual_frn, _)) =
+                        read_single_mft_record(vol.0, idx, record_size, &mut out_buf)
+                    {
+                        if (actual_frn & 0xFFFF_FFFF_FFFF) == idx {
+                            let rec = &mut out_buf[12..12 + record_size];
+                            out.push((
+                                idx,
+                                parse_record_in_place(
+                                    rec,
+                                    idx,
+                                    bytes_per_sector,
+                                    bytes_per_cluster,
+                                    min_size,
+                                ),
+                            ));
+                        }
+                    }
+                }
+                Some(out)
+            }));
+        }
+        for h in handles {
+            match h.join() {
+                Ok(Some(part)) => results.extend(part),
+                _ => all_ok = false,
+            }
+        }
+    });
+
+    if !all_ok {
+        // 有线程开卷失败：退回串行，避免把读不到的记录误判为已删除。
+        results.clear();
+        let mut out_buf = vec![0u8; 16 + record_size];
+        for idx in changed {
+            if let Some((actual_frn, _)) =
+                read_single_mft_record(handle, idx, record_size, &mut out_buf)
+            {
+                if (actual_frn & 0xFFFF_FFFF_FFFF) == idx {
+                    let rec = &mut out_buf[12..12 + record_size];
+                    results.push((
+                        idx,
+                        parse_record_in_place(
+                            rec,
+                            idx,
+                            bytes_per_sector,
+                            bytes_per_cluster,
+                            min_size,
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    results
+}
+
+fn rebuild_in_progress() -> &'static Mutex<HashSet<u64>> {
+    static CELL: OnceLock<Mutex<HashSet<u64>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// 变更量超过上限时不再同步全量重建：先把旧快照返回给本次扫描，后台重建好后替换。
+fn spawn_background_rebuild(
+    volume_path: String,
+    serial: u64,
+    volume: NtfsVolumeData,
+    store_min_size: u64,
+    snap_file: PathBuf,
+    record_size: usize,
+) {
+    {
+        let Ok(mut set) = rebuild_in_progress().lock() else {
+            return;
+        };
+        if !set.insert(serial) {
+            return;
+        }
+    }
+    std::thread::spawn(move || {
+        let rebuilt = (|| -> Option<Arc<MftSnapshot>> {
+            let handle = open_volume_handle(&volume_path)?;
+            // 先取 USN 游标再读 MFT：读取期间发生的变更会在下次增量里补上。
+            let journal = query_usn_journal(handle.0);
+            let mut first = vec![0u8; record_size];
+            if read_exact_at(
+                handle.0,
+                volume.mft_start_lcn * volume.bytes_per_cluster as i64,
+                &mut first,
+            ) < record_size
+            {
+                return None;
+            }
+            let runs = match parse_record_in_place(
+                &mut first,
+                0,
+                volume.bytes_per_sector as usize,
+                volume.bytes_per_cluster as usize,
+                store_min_size,
+            ) {
+                ParsedRecord::MftRoot { runs } => runs,
+                _ => return None,
+            };
+            let (dirs, files) = full_mft_read_parallel(handle.0, &volume, runs, store_min_size)?;
+            Some(Arc::new(MftSnapshot {
+                volume_serial: serial,
+                journal_id: journal.map(|j| j.usn_journal_id).unwrap_or(0),
+                next_usn: journal.map(|j| j.next_usn).unwrap_or(0),
+                min_size: store_min_size,
+                bytes_per_cluster: volume.bytes_per_cluster,
+                dirs,
+                files,
+            }))
+        })();
+        if let Some(snap) = rebuilt {
+            mem_snapshot_put(serial, snap.clone());
+            let _ = save_snapshot(&snap_file, &snap);
+        }
+        if let Ok(mut set) = rebuild_in_progress().lock() {
+            set.remove(&serial);
+        }
+    });
 }
 
 #[derive(Clone)]
@@ -1273,44 +1476,55 @@ pub fn try_mft_scan(
                     mem_snapshot_put(serial, snap.clone());
                     snapshot_opt = Some(snap);
                 } else if snap.next_usn >= journal.first_usn && snap.next_usn < journal.next_usn {
-                    if let Some(changed) =
-                        collect_usn_changed_indices(handle.0, &journal, snap.next_usn)
-                    {
-                        // 取出独占所有权再原地更新；仍被其他扫描持有时才退化为克隆。
-                        drop(mem_snapshot_take(serial));
-                        let mut snap = Arc::try_unwrap(snap).unwrap_or_else(|a| (*a).clone());
-                        let mut out_buf = vec![0u8; 16 + record_size];
-                        for idx in changed {
-                            snap.dirs.remove(&idx);
-                            snap.files.remove(&idx);
-                            if let Some((actual_frn, _len)) =
-                                read_single_mft_record(handle.0, idx, record_size, &mut out_buf)
-                            {
-                                if (actual_frn & 0xFFFF_FFFF_FFFF) == idx {
-                                    let rec = &mut out_buf[12..12 + record_size];
-                                    match parse_record_in_place(
-                                        rec,
-                                        idx,
-                                        bytes_per_sector,
-                                        bytes_per_cluster,
-                                        snap.min_size,
-                                    ) {
-                                        ParsedRecord::Dir { index, node } => {
-                                            snap.dirs.insert(index, node);
-                                        }
-                                        ParsedRecord::File { index, raw } => {
-                                            snap.files.insert(index, raw);
-                                        }
-                                        _ => {}
+                    match collect_usn_changed_indices(handle.0, &journal, snap.next_usn) {
+                        UsnDelta::Changed(changed) => {
+                            // 取出独占所有权再原地更新；仍被其他扫描持有时才退化为克隆。
+                            drop(mem_snapshot_take(serial));
+                            let mut snap = Arc::try_unwrap(snap).unwrap_or_else(|a| (*a).clone());
+                            let parsed = apply_usn_delta(
+                                handle.0,
+                                &volume_path,
+                                changed,
+                                record_size,
+                                bytes_per_sector,
+                                bytes_per_cluster,
+                                snap.min_size,
+                            );
+                            for (idx, parsed_rec) in parsed {
+                                snap.dirs.remove(&idx);
+                                snap.files.remove(&idx);
+                                match parsed_rec {
+                                    ParsedRecord::Dir { index, node } => {
+                                        snap.dirs.insert(index, node);
                                     }
+                                    ParsedRecord::File { index, raw } => {
+                                        snap.files.insert(index, raw);
+                                    }
+                                    _ => {}
                                 }
                             }
+                            snap.next_usn = journal.next_usn;
+                            let snap = Arc::new(snap);
+                            mem_snapshot_put(serial, snap.clone());
+                            save_snapshot_in_background(snap_file.clone(), snap.clone());
+                            snapshot_opt = Some(snap);
                         }
-                        snap.next_usn = journal.next_usn;
-                        let snap = Arc::new(snap);
-                        mem_snapshot_put(serial, snap.clone());
-                        save_snapshot_in_background(snap_file.clone(), snap.clone());
-                        snapshot_opt = Some(snap);
+                        UsnDelta::TooMany => {
+                            // 变更太多：本次先用旧快照，后台重建，下一次扫描再换新。
+                            mem_snapshot_put(serial, snap.clone());
+                            spawn_background_rebuild(
+                                volume_path.clone(),
+                                serial,
+                                volume,
+                                store_min_size,
+                                snap_file.clone(),
+                                record_size,
+                            );
+                            snapshot_opt = Some(snap);
+                        }
+                        UsnDelta::Failed => {
+                            // USN 读取失败：退回下面的同步全量重建。
+                        }
                     }
                 }
             }
