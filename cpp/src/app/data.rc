@@ -1,0 +1,4 @@
+#include "../util/resource_ids.h"
+
+IDR_RULES_JSON RCDATA "rules.json"
+IDR_ALLOWLIST_JSON RCDATA "appdata_path_allowlist.json"

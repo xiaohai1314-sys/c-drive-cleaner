@@ -1,0 +1,24 @@
+{
+  "webview2": {
+    "version": "1.0.4314.35",
+    "url": "https://nuget.azure.cn/v3-flatcontainer/microsoft.web.webview2/1.0.4314.35/microsoft.web.webview2.1.0.4314.35.nupkg",
+    "sha256": "90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4"
+  },
+  "nlohmann": {
+    "version": "3.11.3",
+    "url": "https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp",
+    "sha256": "9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6"
+  },
+  "sqlite": {
+    "version": "3.50.4",
+    "url": "https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip",
+    "sha256": "1d3049dd0f830a025a53105fc79fd2ab9431aea99e137809d064d8ee8356b032",
+    "archiveRoot": "sqlite-amalgamation-3500400/"
+  },
+  "blake3": {
+    "version": "1.8.2",
+    "url": "https://github.com/BLAKE3-team/BLAKE3/archive/refs/tags/1.8.2.zip",
+    "sha256": "d27454d1e6ceaca04ce0d4c6cf327d0e4fd5be8a9c44afe4df8a120f3a01331a",
+    "archiveRoot": "BLAKE3-1.8.2/c/"
+  }
+}

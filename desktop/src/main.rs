@@ -2867,6 +2867,16 @@ fn run_selftest() {
         total,
         started.elapsed().as_secs_f64()
     );
+    if let Ok(path) = std::env::var("CDC_DUMP_CATEGORIES") {
+        if !path.is_empty() {
+            let mut dump = String::new();
+            for cat in &categories {
+                dump.push_str(&format!("{}\t{}\t{}\n", cat.key, cat.size, cat.count));
+            }
+            let _ = std::fs::write(&path, dump);
+            return;
+        }
+    }
     let started = std::time::Instant::now();
     let big = scan_big(None);
     println!(
@@ -2874,6 +2884,34 @@ fn run_selftest() {
         big.len(),
         started.elapsed().as_secs_f64()
     );
+    if let Ok(path) = std::env::var("CDC_DUMP_BIG") {
+        if !path.is_empty() {
+            let mut dump = String::new();
+            for item in &big {
+                dump.push_str(&format!("{}\t{}\t{}\n", item.path, item.size, item.mtime));
+            }
+            let _ = std::fs::write(&path, dump);
+            return;
+        }
+    }
+    if let Ok(path) = std::env::var("CDC_DUMP_DUPS") {
+        if !path.is_empty() {
+            let root = std::env::var("CDC_DUMP_DUPS_ROOT").unwrap_or_else(|_| "C:\\".to_string());
+            let min = std::env::var("CDC_DUMP_DUPS_MIN")
+                .ok()
+                .and_then(|text| text.parse::<u64>().ok())
+                .unwrap_or(1);
+            let started = std::time::Instant::now();
+            let dups = scan_dups(Some(root), Some(min), None, None);
+            println!("dups: {} 组, 用时 {:.1}s", dups.len(), started.elapsed().as_secs_f64());
+            let mut dump = String::new();
+            for group in &dups {
+                dump.push_str(&format!("{}\t{}\t{}\n", group.hash, group.size, group.files.join("|")));
+            }
+            let _ = std::fs::write(&path, dump);
+            return;
+        }
+    }
     let started = std::time::Instant::now();
     let dups = scan_dups(Some("C:\\".to_string()), None, None, None);
     println!(
