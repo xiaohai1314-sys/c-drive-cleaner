@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import AppIcon from "../components/AppIcon.vue";
 import { invoke } from "../api/tauri";
 import type { HiberInfo, SystemItem } from "../api/types";
 import { showConfirm, showResult } from "../composables/useModal";
@@ -122,7 +123,7 @@ onMounted(() => {
     </div>
 
     <div v-for="item in systemItems" :key="item.key" class="sys-card">
-      <div class="card-icon" style="background: #9b59b6">系</div>
+      <div class="card-icon" style="background: #9b59b6"><AppIcon name="gear" :size="18" :stroke="2" /></div>
       <div class="sys-info">
         <div class="sys-title">{{ item.name }}</div>
         <div class="sys-desc">{{ item.describe }}</div>
@@ -153,7 +154,7 @@ onMounted(() => {
       <span class="note">台式机/笔记本空间释放绝技</span>
     </div>
     <div class="sys-card">
-      <div class="card-icon" style="background: #e67e22">休</div>
+      <div class="card-icon" style="background: #e67e22"><AppIcon name="moon" :size="18" :stroke="2" /></div>
       <div class="sys-info">
         <div class="sys-title">休眠状态：{{ hiber.enabled ? "已开启" : "未开启 / 已释放" }}</div>
         <div class="sys-desc">{{ hiber.description }}</div>

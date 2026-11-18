@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import AppIcon from "../components/AppIcon.vue";
 import { invoke } from "../api/tauri";
 import type { CategorySize } from "../api/types";
 import { showConfirm, showResult } from "../composables/useModal";
 import { toast } from "../composables/useToast";
 import { colorFor, fmtSize } from "../lib/format";
+import { iconForCategory } from "../lib/icons";
 import { disk, loadDisk } from "../stores/app";
 import { categories, scanCategories, scanningClean, selected } from "../stores/clean";
 
@@ -167,7 +169,7 @@ onMounted(() => {
         @click="toggle(cat)"
       >
         <div class="card-icon" :style="{ background: colorFor(cat.key) }">
-          {{ (cat.name || cat.key).slice(0, 1) }}
+          <AppIcon :name="iconForCategory(cat.key)" :size="18" :stroke="2" />
         </div>
         <div class="card-name">{{ cat.name }}</div>
         <div class="card-size">{{ cat.size > 0 ? fmtSize(cat.size) : "—" }}</div>

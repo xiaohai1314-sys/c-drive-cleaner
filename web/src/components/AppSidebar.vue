@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from "./AppIcon.vue";
 import { SIDEBAR } from "../config/sidebar";
 import { openHistory, rollbackRules, updateRules } from "../composables/useHistory";
 import { currentPage, navSizes, setPage } from "../stores/app";
@@ -18,7 +19,9 @@ import { currentPage, navSizes, setPage } from "../stores/app";
         :class="{ active: currentPage === item.key }"
         @click="setPage(item.key as never)"
       >
-        <div class="nav-icon" :style="{ background: item.color }">{{ item.symbol }}</div>
+        <div class="nav-icon" :style="{ background: item.color }">
+          <AppIcon :name="item.icon" :size="15" :stroke="2" />
+        </div>
         <span>{{ item.label }}</span>
         <span class="nav-size">{{ navSizes[item.key] || "" }}</span>
       </div>
