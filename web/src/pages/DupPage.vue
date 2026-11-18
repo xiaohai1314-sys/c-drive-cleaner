@@ -10,9 +10,9 @@ import { applyKeeperRule, pickKeeper } from "../lib/dup";
 import { openFile, revealFile } from "../lib/files";
 import { fmtSize, fmtTime } from "../lib/format";
 import {
+  dupCachedAt,
   dupChecked,
   dupDrives,
-  dupFast,
   dupGroups,
   dupLoading,
   dupScope,
@@ -29,6 +29,9 @@ const SCOPES: Array<[DupScope, string]> = [
 const reclaim = computed(() =>
   dupGroups.value.reduce((sum, group) => sum + group.size * Math.max(group.files.length - 1, 0), 0),
 );
+const dupFileCount = computed(() =>
+  dupGroups.value.reduce((sum, group) => sum + group.files.length, 0),
+);
 
 const subText = computed(() => {
   if (dupLoading.value) {
@@ -43,13 +46,13 @@ const subText = computed(() => {
     return "请选择要扫描的磁盘，然后点「扫描选中的磁盘」。";
   }
   const multiDrive = dupScope.value === "ALL" || dupScope.value === "PICK";
-  const scopeNote = multiDrive ? "（多盘扫描只比对 ≥4MB 的文件）" : "";
-  const fastNote = dupFast.value ? "（快速扫描：只比对头/中/尾 256KB，删除前完整核对）" : "";
+  const scopeNote = multiDrive ? "（多盘扫描只比对 ≥2MB 的文件）" : "";
   const picked =
     dupScope.value === "PICK"
       ? `已选 ${[...dupDrives].map((drive) => drive.replace(/\\+$/, "")).join("、")}，`
       : "";
-  return `${picked}每组自动保留一份，已勾选 ${dupChecked.size} 个副本${scopeNote}${fastNote}`;
+  const stamp = dupCachedAt.value ? `上次扫描 ${fmtTime(dupCachedAt.value)} · ` : "";
+  return `${picked}${stamp}每组自动保留一份，已勾选 ${dupChecked.size} 个副本${scopeNote}`;
 });
 
 const shownGroups = computed(() => dupGroups.value.slice(0, 300));
@@ -69,6 +72,7 @@ function toggleDrive(drive: string) {
   else dupDrives.add(drive);
   dupGroups.value = [];
   dupChecked.clear();
+  dupCachedAt.value = 0;
 }
 
 function startPickedScan() {
@@ -81,14 +85,7 @@ function startPickedScan() {
   void scan();
 }
 
-function toggleFast() {
-  dupFast.value = !dupFast.value;
-  dupGroups.value = [];
-  dupChecked.clear();
-  if (dupScope.value !== "PICK" || dupDrives.size) void scan();
-}
-
-function checkAllCopies() {
+function selectDefaults() {
   dupChecked.clear();
   for (const group of dupGroups.value) {
     const keeper = pickKeeper(group);
@@ -113,43 +110,70 @@ function togglePath(path: string, keeper: string) {
   else dupChecked.add(path);
 }
 
+interface DupScanArgs {
+  root: string | null;
+  drives: string[] | null;
+  minSize: number | null;
+  fast: boolean;
+  [key: string]: unknown;
+}
+
+/** 当前页签对应的扫描参数；PICK 但没选盘时返回 null。 */
+async function scanArgs(): Promise<DupScanArgs | null> {
+  let root: string | null = null;
+  let pickedDrives: string[] | null = null;
+  if (dupScope.value === "C:\\") {
+    root = "C:\\";
+  } else if (dupScope.value === "USER") {
+    root = await invoke<string>("user_profile");
+  } else if (dupScope.value === "PICK") {
+    pickedDrives = [...dupDrives];
+    if (!pickedDrives.length) return null;
+  }
+  const multiDrive = dupScope.value === "ALL" || dupScope.value === "PICK";
+  return {
+    root,
+    drives: pickedDrives,
+    minSize: multiDrive ? 2 * 1024 * 1024 : null,
+    // 与毒霸一致：只采样头/中/尾各 256KB 判定分组，删除前再逐字节核对。
+    fast: true,
+  };
+}
+
 async function scan() {
   dupLoading.value = true;
   startScanStatus();
   try {
-    let root: string | null = null;
-    let pickedDrives: string[] | null = null;
-    if (dupScope.value === "C:\\") {
-      root = "C:\\";
-    } else if (dupScope.value === "USER") {
-      root = await invoke<string>("user_profile");
-    } else if (dupScope.value === "PICK") {
-      pickedDrives = [...dupDrives];
-      if (!pickedDrives.length) {
-        dupLoading.value = false;
-        stopScanStatus();
-        return;
-      }
-    }
-    const multiDrive = dupScope.value === "ALL" || dupScope.value === "PICK";
-    const minSize = multiDrive ? 4 * 1024 * 1024 : null;
-    dupGroups.value = await invoke<DupGroup[]>("scan_dups", {
-      root,
-      drives: pickedDrives,
-      minSize,
-      fast: dupFast.value,
-    });
-    dupChecked.clear();
-    for (const group of dupGroups.value) {
-      const keeper = pickKeeper(group);
-      for (const path of group.files) if (path !== keeper) dupChecked.add(path);
-    }
+    const args = await scanArgs();
+    if (!args) return;
+    dupGroups.value = await invoke<DupGroup[]>("scan_dups", args);
+    dupCachedAt.value = Math.floor(Date.now() / 1000);
+    selectDefaults();
   } catch (error) {
     dupGroups.value = [];
+    dupCachedAt.value = 0;
     toast("扫描失败：" + error);
+  } finally {
+    dupLoading.value = false;
+    stopScanStatus();
   }
-  dupLoading.value = false;
-  stopScanStatus();
+}
+
+/** 打开页面时先显示上次扫描的结果，不触发整盘扫描。 */
+async function loadCached(): Promise<boolean> {
+  try {
+    const args = await scanArgs();
+    if (!args) return true;
+    const cached = await invoke<{ groups: DupGroup[]; cached_at: number }>("dup_cached_result", args);
+    if (dupLoading.value || dupGroups.value.length) return true;
+    if (!cached.cached_at) return false;
+    dupGroups.value = cached.groups;
+    dupCachedAt.value = cached.cached_at;
+    selectDefaults();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function removeSelected() {
@@ -169,10 +193,8 @@ async function removeSelected() {
   const lines = [
     `将把 ${items.length} 个副本移到回收站，约 ${fmtSize(total)}。`,
     "每组保留一份；删除前会重新核对内容，扫描后变过的文件会跳过。",
+    "扫描阶段只采样了头/中/尾各 256KB，删除前会把每个副本和保留文件完整比对一遍，数据量大时需要几分钟。",
   ];
-  if (dupFast.value) {
-    lines.push("当前是快速扫描：删除前会把每个副本和保留文件完整比对一遍，数据量大时需要几分钟。");
-  }
   if (!(await showConfirm("确认清理重复文件", lines, "移到回收站"))) return;
   try {
     const report = await invoke<DeleteReport>("delete_dups", { items });
@@ -183,19 +205,25 @@ async function removeSelected() {
   await scan();
 }
 
-onMounted(() => {
-  if (!dupGroups.value.length && !dupLoading.value && dupScope.value !== "PICK") void scan();
+onMounted(async () => {
+  if (dupGroups.value.length || dupLoading.value || dupScope.value === "PICK") return;
+  if (!(await loadCached())) void scan();
 });
 </script>
 
 <template>
   <div class="page-head">
     <div class="headline">
-      发现 <span class="num">{{ dupGroups.length }}</span> 组重复文件，共
-      <span class="num">{{ fmtSize(reclaim) }}</span>
+      <template v-if="dupLoading">正在扫描重复文件…</template>
+      <template v-else>
+        发现 <span class="num">{{ dupGroups.length }}</span> 组重复文件，共
+        <span class="num">{{ dupFileCount }}</span> 个文件、
+        <span class="num">{{ fmtSize(reclaim) }}</span>
+      </template>
     </div>
     <button class="green-btn" @click="removeSelected">一键清理</button>
     <button v-if="dupLoading" class="gray-btn" @click="cancelActiveScan('dup')">取消扫描</button>
+    <button v-else class="gray-btn" @click="scan">重新扫描</button>
   </div>
   <div class="sub">{{ subText }}</div>
 
@@ -226,12 +254,9 @@ onMounted(() => {
   </div>
 
   <div class="smart-tools">
-    <button class="smart-btn" :class="{ primary: dupFast }" title="开启后只比对头/中/尾各 256KB，扫描更快；删除时仍会拿副本和保留文件做完整比对" @click="toggleFast">
-      {{ dupFast ? "快速扫描：开" : "快速扫描：关" }}
-    </button>
     <button class="smart-btn" @click="applyRule('newest')">✨ 保留最新文件</button>
     <button class="smart-btn" @click="applyRule('shortest')">✨ 保留路径最短</button>
-    <button class="smart-btn" @click="checkAllCopies">全选所有副本</button>
+    <button class="smart-btn" @click="selectDefaults">全选所有副本</button>
     <button class="smart-btn" @click="uncheckAll">取消全选</button>
   </div>
 

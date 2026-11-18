@@ -323,6 +323,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         const Json args =
             argsText.empty() ? Json::object()
                              : Json::parse(argsText, nullptr, false);
+        if (args.is_discarded()) {
+            std::fprintf(stderr, "参数不是合法 JSON: %s\n", argsText.c_str());
+            return 2;
+        }
         return RunInvoke(WideToUtf8(invokeCommand), args);
     }
 

@@ -93,6 +93,37 @@ Json EmptyDeleteReport() {
                 {"reasons", Json::array()}};
 }
 
+struct DupArgs {
+    std::optional<std::string> root;
+    std::vector<std::string> drives;
+    std::optional<uint64_t> minSize;
+    bool fast = false;
+    bool turbo = false;
+};
+
+DupArgs ParseDupArgs(const Json& args) {
+    DupArgs parsed;
+    const std::string rootText = ArgString(args, "root");
+    if (!rootText.empty()) {
+        parsed.root = rootText;
+    }
+    parsed.drives = ArgStringList(args, "drives");
+    if (!args.is_object()) {
+        return parsed;
+    }
+    const char* key = args.contains("minSize") ? "minSize" : "min_size";
+    parsed.minSize = ArgUint(args, key);
+    const auto found = args.find("fast");
+    if (found != args.end() && found->is_boolean()) {
+        parsed.fast = found->get<bool>();
+    }
+    const auto turboFound = args.find("turbo");
+    if (turboFound != args.end() && turboFound->is_boolean()) {
+        parsed.turbo = turboFound->get<bool>();
+    }
+    return parsed;
+}
+
 Json DeleteReportJson(uint64_t freed, uint64_t deleted,
                       const std::vector<std::string>& failed,
                       const std::vector<std::string>& reasons) {
@@ -260,25 +291,14 @@ void RegisterAll() {
         return ScanBig(ArgStringList(args, "drives"));
     };
     table["scan_dups"] = [](const Json& args) {
-        std::optional<std::string> root;
-        const std::string rootText = ArgString(args, "root");
-        if (!rootText.empty()) {
-            root = rootText;
-        }
-        std::optional<uint64_t> minSize;
-        if (args.is_object()) {
-            const char* key = args.contains("minSize") ? "minSize" : "min_size";
-            minSize = ArgUint(args, key);
-        }
-        bool fast = false;
-        if (args.is_object()) {
-            const auto found = args.find("fast");
-            if (found != args.end() && found->is_boolean()) {
-                fast = found->get<bool>();
-            }
-        }
-        return dups::ScanDups(root, ArgStringList(args, "drives"), minSize,
-                              fast);
+        const DupArgs parsed = ParseDupArgs(args);
+        return dups::ScanDups(parsed.root, parsed.drives, parsed.minSize,
+                              parsed.fast, parsed.turbo);
+    };
+    table["dup_cached_result"] = [](const Json& args) {
+        const DupArgs parsed = ParseDupArgs(args);
+        return dups::CachedResult(parsed.root, parsed.drives, parsed.minSize,
+                                  parsed.fast, parsed.turbo);
     };
     table["delete_recycle"] = [](const Json& args) {
         return recycle::DeleteRecycle(ArgStringList(args, "paths"));

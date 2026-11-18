@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 
@@ -164,10 +166,13 @@ std::vector<std::pair<size_t, Digest>> CoalescedRawVolumeHeads(
                   return left.offset < right.offset;
               });
 
-    const uint64_t maxGap = isSsd ? 16 * 1024 : 256 * 1024;
-    const uint64_t maxSpan = isSsd ? 256 * 1024 : 512 * 1024;
+    // 机械盘上每次读都要寻道，把邻近文件的头部合并成一次读能显著减少寻道次数；
+    // 固态盘寻道几乎免费，窗口小一点避免多读无用数据。
+    const uint64_t maxGap = isSsd ? 64 * 1024 : 1024 * 1024;
+    const uint64_t maxSpan = isSsd ? 1024 * 1024 : 4 * 1024 * 1024;
     std::vector<uint8_t> buffer(static_cast<size_t>(maxSpan));
     out.reserve(targets.size());
+    size_t readCount = 0;
 
     size_t index = 0;
     while (index < targets.size()) {
@@ -192,6 +197,7 @@ std::vector<std::pair<size_t, Digest>> CoalescedRawVolumeHeads(
         }
 
         const size_t spanLength = static_cast<size_t>(endOffset - startOffset);
+        ++readCount;
         LARGE_INTEGER distance;
         distance.QuadPart = static_cast<LONGLONG>(startOffset);
         bool ok = SetFilePointerEx(volume.get(), distance, nullptr, FILE_BEGIN) != 0;
@@ -216,6 +222,10 @@ std::vector<std::pair<size_t, Digest>> CoalescedRawVolumeHeads(
             }
         }
         index = next;
+    }
+    if (std::getenv("CDC_TRACE") != nullptr) {
+        std::fprintf(stderr, "raw[%c]: %zu 个文件 -> %zu 次读%s\n", driveLetter,
+                     targets.size(), readCount, isSsd ? "（固态）" : "（机械）");
     }
     return out;
 }

@@ -145,7 +145,9 @@ target_link_options(cdc_app PRIVATE /MANIFEST:NO)
 add_dependencies(cdc_app cdc_web)
 
 # 把前端与规则文件放到 exe 旁边；发布版可改为嵌入。
+# 先清掉旧的 web/，避免带哈希的旧资源越积越多（打包时会一起进去）。
 add_custom_command(TARGET cdc_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:cdc_app>/web"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CDC_WEB_DIST}" "$<TARGET_FILE_DIR:cdc_app>/web"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

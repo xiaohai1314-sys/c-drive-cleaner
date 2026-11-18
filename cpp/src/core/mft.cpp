@@ -959,18 +959,46 @@ std::pair<uint64_t, uint64_t> ParseFirstExtent(const uint8_t* data,
     return {0, 0};
 }
 
+/// 超过这个数量就认为目录遍历不划算，切回整卷 $MFT。
+constexpr size_t kSubtreeWalkLimit = 200'000;
+
+/// 长路径的 FindFirstFileW 需要 \\?\ 前缀，超过 MAX_PATH 才加，避免影响普通路径。
+std::wstring LongPathForm(const std::wstring& path) {
+    if (path.size() < 240 || path.rfind(L"\\\\?\\", 0) == 0) {
+        return path;
+    }
+    if (path.rfind(L"\\\\", 0) == 0) {
+        return L"\\\\?\\UNC\\" + path.substr(2);
+    }
+    return L"\\\\?\\" + path;
+}
+
 std::vector<FileEntry> FallbackWalkFiles(
     const std::string& root, uint64_t minSize,
-    const std::vector<std::string>& skipTop) {
+    const std::vector<std::string>& skipTop, size_t limit, bool* overflow) {
     std::vector<FileEntry> out;
     std::vector<std::wstring> tops;
+    std::atomic<size_t> produced{0};
+    std::atomic<bool> capped{false};
+
+    auto overLimit = [limit, &produced, &capped]() {
+        if (limit == 0) {
+            return false;
+        }
+        if (produced.fetch_add(1) + 1 <= limit) {
+            return false;
+        }
+        capped.store(true, std::memory_order_relaxed);
+        return true;
+    };
 
     WIN32_FIND_DATAW data;
-    HANDLE handle = FindFirstFileW((Utf8ToWide(root) + L"\\*").c_str(), &data);
+    const std::wstring wideRoot = Utf8ToWide(root);
+    HANDLE handle =
+        FindFirstFileW(LongPathForm(wideRoot + L"\\*").c_str(), &data);
     if (handle == INVALID_HANDLE_VALUE) {
         return out;
     }
-    const std::wstring wideRoot = Utf8ToWide(root);
     do {
         const std::wstring name(data.cFileName);
         if (name.empty() || name == L"." || name == L"..") {
@@ -997,6 +1025,9 @@ std::vector<FileEntry> FallbackWalkFiles(
             if (size < minSize) {
                 continue;
             }
+            if (overLimit()) {
+                break;
+            }
             FileEntry entry;
             entry.path = WideToUtf8(child);
             entry.size = size;
@@ -1008,15 +1039,18 @@ std::vector<FileEntry> FallbackWalkFiles(
     } while (FindNextFileW(handle, &data) != 0);
     FindClose(handle);
 
-    auto walkDir = [minSize](const std::wstring& start,
-                             std::vector<FileEntry>& sink) {
+    auto walkDir = [minSize, &overLimit, &capped](const std::wstring& start,
+                                                  std::vector<FileEntry>& sink) {
         std::vector<std::wstring> stack = {start};
         while (!stack.empty()) {
+            if (capped.load(std::memory_order_relaxed)) {
+                return;
+            }
             const std::wstring current = stack.back();
             stack.pop_back();
             WIN32_FIND_DATAW child;
             HANDLE find =
-                FindFirstFileW((current + L"\\*").c_str(), &child);
+                FindFirstFileW(LongPathForm(current + L"\\*").c_str(), &child);
             if (find == INVALID_HANDLE_VALUE) {
                 continue;
             }
@@ -1041,6 +1075,9 @@ std::vector<FileEntry> FallbackWalkFiles(
                     static_cast<uint64_t>(child.nFileSizeLow);
                 if (size < minSize) {
                     continue;
+                }
+                if (overLimit()) {
+                    break;
                 }
                 FileEntry entry;
                 entry.path = WideToUtf8(full);
@@ -1086,6 +1123,9 @@ std::vector<FileEntry> FallbackWalkFiles(
             walkDir(dir, out);
         }
     }
+    if (overflow != nullptr) {
+        *overflow = capped.load(std::memory_order_relaxed);
+    }
     return out;
 }
 
@@ -1102,6 +1142,29 @@ std::vector<FileEntry> ScanFilesWhere(const std::string& root, uint64_t minSize,
     std::string trimmed = root;
     while (!trimmed.empty() && trimmed.back() == '\\') {
         trimmed.pop_back();
+    }
+    const bool isDriveRoot = trimmed.size() == 2;
+    // 子目录直接走目录遍历：$MFT 要先把整卷枚举一遍再按前缀过滤，为一个小文件夹
+    // 付全盘的代价。只有子树大到超过阈值时才回退到 $MFT。
+    if (!isDriveRoot && trimmed.size() > 2 && trimmed[1] == ':' &&
+        std::isalpha(static_cast<unsigned char>(trimmed[0])) != 0) {
+        bool overflow = false;
+        std::vector<FileEntry> walked = FallbackWalkFiles(
+            trimmed, minSize, skipTop, kSubtreeWalkLimit, &overflow);
+        if (std::getenv("CDC_TRACE") != nullptr) {
+            std::fprintf(stderr, "mft: 子目录 %s 走目录遍历 -> %zu 个文件\n",
+                         trimmed.c_str(), walked.size());
+        }
+        if (!overflow) {
+            std::vector<FileEntry> filtered;
+            filtered.reserve(walked.size());
+            for (FileEntry& entry : walked) {
+                if (keep(Basename(entry.path), entry.size)) {
+                    filtered.push_back(std::move(entry));
+                }
+            }
+            return filtered;
+        }
     }
     if (trimmed.size() >= 2 && trimmed[1] == ':' &&
         std::isalpha(static_cast<unsigned char>(trimmed[0])) != 0) {
@@ -1231,7 +1294,6 @@ std::vector<FileEntry> ScanFilesWhere(const std::string& root, uint64_t minSize,
 
                 const DirMap& dirs = snapshot->dirs;
                 const FileMap& files = snapshot->files;
-                const bool isDriveRoot = trimmed.size() == 2;
                 const std::string rootLower = ToLowerAscii(trimmed);
                 const std::string rootPrefix = rootLower + "\\";
                 const size_t rootLen = rootLower.size() + 1;

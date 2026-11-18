@@ -41,9 +41,11 @@ std::vector<FileEntry> ScanFilesWhere(const std::string& root, uint64_t minSize,
                                       const std::vector<std::string>& skipTop,
                                       const KeepFn& keep);
 
+/// limit 非 0 时，文件数超过上限就提前中止并把 overflow 置为 true。
 std::vector<FileEntry> FallbackWalkFiles(
     const std::string& root, uint64_t minSize,
-    const std::vector<std::string>& skipTop);
+    const std::vector<std::string>& skipTop, size_t limit = 0,
+    bool* overflow = nullptr);
 
 // ---------- 快照（MFT3 二进制，与 Rust 版逐字节兼容） ----------
 

@@ -454,8 +454,9 @@ void FlushCandidateHashes(hashcache::HashCache& cache,
 }
 
 PipelineOutput RunDupPipeline(std::vector<DupCandidate> stage1Items, bool fast,
-                              size_t hddNcqWorkers, bool updateStage,
-                              bool trace, const char* label) {
+                              bool turbo, size_t hddNcqWorkers,
+                              bool updateStage, bool trace,
+                              const char* label) {
     PipelineOutput output;
     if (stage1Items.empty()) {
         return output;
@@ -675,6 +676,15 @@ PipelineOutput RunDupPipeline(std::vector<DupCandidate> stage1Items, bool fast,
                      stage2Items.size());
     }
     if (stage2Items.empty()) {
+        return output;
+    }
+
+    if (turbo) {
+        // 极速模式：4KB 头哈希已经是最终判据，不再做采样与全量校验。
+        // 误判的组会在 delete_dups 的逐字节复核阶段被拦下。
+        for (DupCandidate& item : stage2Items) {
+            output.finalItems.push_back(std::move(item));
+        }
         return output;
     }
 
@@ -1016,19 +1026,20 @@ std::string DebugStringList(const std::vector<std::string>& values) {
 }
 
 std::string DupsCachePath(const std::vector<std::string>& roots, uint64_t min,
-                          bool fast) {
+                          bool fast, bool turbo) {
     const std::string key = DebugStringList(roots) + ":" +
                             std::to_string(min) + ":" +
-                            (fast ? "true" : "false");
+                            (fast ? "true" : "false") +
+                            (turbo ? ":turbo" : "");
     const Digest digest = Blake3Hash(key.data(), key.size());
     return JoinPath(CacheDir(), "dups-" + hashcache::DigestToHex(digest) + ".json");
 }
 
-bool CacheIsFresh(const std::string& path) {
+std::optional<uint64_t> FileMtimeUnixSeconds(const std::string& path) {
     WIN32_FILE_ATTRIBUTE_DATA data = {};
     if (GetFileAttributesExW(Utf8ToWide(path).c_str(), GetFileExInfoStandard,
                              &data) == 0) {
-        return false;
+        return std::nullopt;
     }
     const uint64_t fileTime =
         (static_cast<uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) |
@@ -1036,10 +1047,39 @@ bool CacheIsFresh(const std::string& path) {
     constexpr uint64_t kWindowsEpochDiffSecs = 11'644'473'600ULL;
     const uint64_t seconds = fileTime / 10'000'000ULL;
     if (seconds <= kWindowsEpochDiffSecs) {
+        return 0;
+    }
+    return seconds - kWindowsEpochDiffSecs;
+}
+
+bool CacheIsFresh(const std::string& path) {
+    const std::optional<uint64_t> stamp = FileMtimeUnixSeconds(path);
+    if (!stamp.has_value()) {
         return false;
     }
-    const uint64_t age = NowUnixSeconds() - (seconds - kWindowsEpochDiffSecs);
-    return age < kCacheFreshSeconds;
+    const uint64_t now = NowUnixSeconds();
+    return now >= *stamp && now - *stamp < kCacheFreshSeconds;
+}
+
+std::vector<std::string> ResolveRoots(const std::optional<std::string>& root,
+                                      const std::vector<std::string>& drives) {
+    const std::vector<std::string> fixed = disk::FixedDrives();
+    std::vector<std::string> roots;
+    if (!drives.empty()) {
+        for (const std::string& drive : drives) {
+            for (const std::string& candidate : fixed) {
+                if (EqualsIgnoreCase(drive, candidate)) {
+                    roots.push_back(drive);
+                    break;
+                }
+            }
+        }
+    } else if (root.has_value()) {
+        roots.push_back(*root);
+    } else {
+        roots = fixed;
+    }
+    return roots;
 }
 
 std::optional<std::string> ReadTextFile(const std::string& path) {
@@ -1111,34 +1151,19 @@ namespace dups {
 
 Json ScanDups(const std::optional<std::string>& root,
               const std::vector<std::string>& drives,
-              std::optional<uint64_t> minSize, bool fast) {
+              std::optional<uint64_t> minSize, bool fast, bool turbo) {
     scanstate::Begin("dup", "枚举文件");
     gDupCancel.store(false);
     const bool trace = std::getenv("CDC_TRACE") != nullptr;
 
-    const std::vector<std::string> fixed = disk::FixedDrives();
-    std::vector<std::string> roots;
-    if (!drives.empty()) {
-        for (const std::string& drive : drives) {
-            for (const std::string& candidate : fixed) {
-                if (EqualsIgnoreCase(drive, candidate)) {
-                    roots.push_back(drive);
-                    break;
-                }
-            }
-        }
-    } else if (root.has_value()) {
-        roots.push_back(*root);
-    } else {
-        roots = fixed;
-    }
+    const std::vector<std::string> roots = ResolveRoots(root, drives);
     if (roots.empty()) {
         scanstate::End("dup");
         return Json::array();
     }
 
     const uint64_t min = minSize.value_or(kDefaultMinSize);
-    const std::string cachePath = DupsCachePath(roots, min, fast);
+    const std::string cachePath = DupsCachePath(roots, min, fast, turbo);
     if (CacheIsFresh(cachePath)) {
         if (const std::optional<std::string> text = ReadTextFile(cachePath)) {
             const Json parsed = Json::parse(*text, nullptr, false);
@@ -1256,8 +1281,10 @@ Json ScanDups(const std::optional<std::string>& root,
                 candidate.strong = cached->strong;
                 candidate.full = cached->full;
             }
-            const bool hasFinal = fast ? candidate.strong.has_value()
-                                       : candidate.full.has_value();
+            const bool hasFinal = turbo
+                                      ? candidate.head.has_value()
+                                      : (fast ? candidate.strong.has_value()
+                                              : candidate.full.has_value());
             if (!hasFinal) {
                 allReady = false;
             }
@@ -1265,7 +1292,8 @@ Json ScanDups(const std::optional<std::string>& root,
         }
         if (allReady) {
             for (DupCandidate& item : converted) {
-                const Digest digest = fast ? *item.strong : *item.full;
+                const Digest digest = turbo ? *item.head
+                                            : (fast ? *item.strong : *item.full);
                 HashKey key;
                 key.size = item.size;
                 key.digest = digest;
@@ -1292,9 +1320,7 @@ Json ScanDups(const std::optional<std::string>& root,
         std::vector<DupGroup> groups;
         BuildDupGroups(std::move(readyFinal), groups);
         SortDupGroups(groups);
-        if (!groups.empty()) {
-            WriteTextFile(cachePath, GroupsToJson(groups).dump());
-        }
+        WriteTextFile(cachePath, GroupsToJson(groups).dump());
         scanstate::End("dup");
         return GroupsToJson(groups);
     }
@@ -1308,15 +1334,15 @@ Json ScanDups(const std::optional<std::string>& root,
     {
         std::optional<std::thread> ssdThread;
         if (!ssdOnlyStage1.empty()) {
-            ssdThread.emplace([&ssdOnlyStage1, &ssdOut, fast, hasMixed,
+            ssdThread.emplace([&ssdOnlyStage1, &ssdOut, fast, turbo, hasMixed,
                                trace] {
-                ssdOut = RunDupPipeline(std::move(ssdOnlyStage1), fast, 1,
-                                        !hasMixed, trace, "ssd");
+                ssdOut = RunDupPipeline(std::move(ssdOnlyStage1), fast, turbo,
+                                        1, !hasMixed, trace, "ssd");
             });
         }
         if (hasMixed) {
-            mixedOut = RunDupPipeline(std::move(mixedStage1), fast, 2, true,
-                                      trace, "hdd+mixed");
+            mixedOut = RunDupPipeline(std::move(mixedStage1), fast, turbo, 2,
+                                      true, trace, "hdd+mixed");
         }
         if (ssdThread.has_value()) {
             ssdThread->join();
@@ -1334,10 +1360,11 @@ Json ScanDups(const std::optional<std::string>& root,
         return Json::array();
     }
 
-    auto mergeFinal = [&readyFinal, fast](std::vector<DupCandidate>& items) {
+    auto mergeFinal = [&readyFinal, fast, turbo](
+                          std::vector<DupCandidate>& items) {
         for (DupCandidate& item : items) {
             const std::optional<Digest>& digest =
-                fast ? item.strong : item.full;
+                turbo ? item.head : (fast ? item.strong : item.full);
             if (!digest.has_value()) {
                 continue;
             }
@@ -1362,14 +1389,46 @@ Json ScanDups(const std::optional<std::string>& root,
         std::fprintf(stderr, "dup: 找到 %zu 组, 总用时 %.1fs\n", groups.size(),
                      seconds);
     }
-    if (!scanstate::WasCancelled("dup") && !groups.empty()) {
+    if (!scanstate::WasCancelled("dup")) {
         WriteTextFile(cachePath, GroupsToJson(groups).dump());
     }
     scanstate::End("dup");
     return GroupsToJson(groups);
 }
 
-void InvalidateCache() {    std::error_code error;
+Json CachedResult(const std::optional<std::string>& root,
+                  const std::vector<std::string>& drives,
+                  std::optional<uint64_t> minSize, bool fast, bool turbo) {
+    Json result;
+    result["groups"] = Json::array();
+    result["cached_at"] = 0;
+
+    const std::vector<std::string> roots = ResolveRoots(root, drives);
+    if (roots.empty()) {
+        return result;
+    }
+    const std::string cachePath =
+        DupsCachePath(roots, minSize.value_or(kDefaultMinSize), fast, turbo);
+    const std::optional<uint64_t> stamp = FileMtimeUnixSeconds(cachePath);
+    if (!stamp.has_value()) {
+        return result;
+    }
+    const std::optional<std::string> text = ReadTextFile(cachePath);
+    if (!text.has_value()) {
+        return result;
+    }
+    const Json parsed = Json::parse(*text, nullptr, false);
+    std::vector<Json> groups;
+    if (parsed.is_discarded() || !GroupsFromJson(parsed, groups)) {
+        return result;
+    }
+    result["groups"] = parsed;
+    result["cached_at"] = *stamp;
+    return result;
+}
+
+void InvalidateCache() {
+    std::error_code error;
     const std::filesystem::path dir(Utf8ToWide(CacheDir()));
     for (const auto& entry : std::filesystem::directory_iterator(dir, error)) {
         if (error) {
